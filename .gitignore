@@ -1,0 +1,25 @@
+# ── Python ─────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# ── Runtime state (machine-written, never source) ──
+state.json
+data/
+*.log
+
+# ── ink firmware build output ──────────────
+build/
+*.hex
+*.bin
+*.elf
+
+# ── Secrets / local config ─────────────────
+.env
+
+# ── OS junk ────────────────────────────────
+Thumbs.db
+desktop.ini
+.DS_Store

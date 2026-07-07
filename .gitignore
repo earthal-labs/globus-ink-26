@@ -16,6 +16,9 @@ build/
 *.bin
 *.elf
 
+# ── tui (Rust) build output ────────────────
+target/
+
 # ── Secrets / local config ─────────────────
 .env
 

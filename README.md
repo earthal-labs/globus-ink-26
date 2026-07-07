@@ -38,6 +38,10 @@ Two computers, named for their Soviet counterparts:
 - **`tsup/`** — ЦУП (*Tsentr Upravleniya Polyotami*, Mission Control Center).
   Python on the Pi. Propagates orbits with Skyfield, computes the target globe
   orientation, runs the quaternion controller, streams wheel speeds over serial.
+  - **`tsup/tui/`** — terminal UI, forked from [tui-globe](https://github.com/d10n/tui-globe)
+    (see [Acknowledgments](#acknowledgments)). Renders the live globe orientation as a
+    braille globe in the terminal and will feed manual-control input back into the
+    tracker loop. Rust/Cargo; in progress.
 - **`ink/`** — ИНК (the instrument). C++ firmware on the Arduino Nano. Deliberately
   dumb: receives three signed wheel speeds, generates step pulses, reports faults.
   Knows nothing about satellites.
@@ -50,12 +54,14 @@ file is the only event that requires a firmware reflash.
 | Path | Contents |
 |---|---|
 | `tsup/` | Python: main tracker loop, kinematics, config, serial link |
+| `tsup/tui/` | Rust: terminal UI, forked from `tui-globe` |
 | `ink/` | Arduino firmware (`arduino-cli`, fqbn `arduino:renesas_uno:nanor4`) |
 | `docs/` | `protocol.md`, the tsup/ink serial contract |
 | `hardware/` | Mount STLs, wiring notes, BOM |
 | `scripts/` | PC-side build helpers, e.g. `ink.cmd` (compile/upload/monitor the firmware) |
 
-Python env is managed with [uv](https://docs.astral.sh/uv/).
+Python env is managed with [uv](https://docs.astral.sh/uv/); the TUI is managed with
+[Cargo](https://doc.rust-lang.org/cargo/).
 
 ## Hardware
 
@@ -79,3 +85,16 @@ and no internal wiring.
 - [ ] ink v1 firmware (serial protocol, steppers)
 - [ ] tsup tracking loop (Skyfield to wheel speeds)
 - [ ] Mechanical build (deck, wedge mounts, cradle)
+- [ ] tui manual-control bridge into the tracker loop
+
+## Acknowledgments
+
+`tsup/tui/` is a fork of [tui-globe](https://github.com/d10n/tui-globe) by
+[d10n](https://github.com/d10n), a ratatui widget that renders a 3D globe in the
+terminal with braille characters. This project is licensed GPL-3.0-or-later to
+build on that work. The map data under `tsup/tui/assets/` is Natural Earth data
+(public domain / CC0-1.0); see [`tsup/tui/REUSE.toml`](tsup/tui/REUSE.toml).
+
+## License
+
+GPL-3.0-or-later. See [`LICENSE`](LICENSE).

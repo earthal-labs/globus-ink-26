@@ -1,10 +1,10 @@
 [package]
-name = "tui-globe"
-version = "1.0.0"
-authors = ["d10n <david@bitinvert.com>"]
+name = "vzor"
+version = "0.1.0"
+authors = ["d10n <david@bitinvert.com>", "Earthal Labs"]
 edition = "2024"
 rust-version = "1.94.0"
-description = "Render a 3D globe in a terminal"
+description = "Terminal UI for the Globus INK 25 replica, forked from tui-globe"
 license = "GPL-3.0-or-later"
 
 [lib]
@@ -13,6 +13,10 @@ path = "src/lib.rs"
 [dependencies]
 ratatui = { version = "0.30.0", default-features = false, features = ["std"] }
 zstd = { version = "0.13", default-features = false }
+
+[dev-dependencies]
+crossterm = "0.29"
+ratatui = { version = "0.30.0", default-features = false, features = ["std", "crossterm"] }
 
 [build-dependencies]
 zstd = { version = "0.13", default-features = false }

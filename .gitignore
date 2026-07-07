@@ -16,7 +16,7 @@ build/
 *.bin
 *.elf
 
-# ── tui (Rust) build output ────────────────
+# ── vzor (Rust) build output ────────────────
 target/
 
 # ── Secrets / local config ─────────────────

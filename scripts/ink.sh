@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Pi-side counterpart to scripts/ink.cmd - compile/upload/monitor the ink
-# firmware from wherever the Arduino's USB is actually plugged in.
+# Compiles, uploads, and monitors the ink firmware. Run on the Pi
 set -euo pipefail
 
 FQBN="arduino:renesas_uno:nanor4"

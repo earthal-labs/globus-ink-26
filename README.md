@@ -60,7 +60,7 @@ file is the only event that requires a firmware reflash.
 | `ink/` | Arduino firmware (`arduino-cli`, fqbn `arduino:renesas_uno:nanor4`) |
 | `docs/` | `protocol.md`, the tsup/ink serial contract |
 | `hardware/` | Mount STLs, wiring notes, BOM |
-| `scripts/` | PC-side build helpers, e.g. `ink.cmd` (compile/upload/monitor the firmware) |
+| `scripts/` | `ink.sh` - compile/upload/monitor the firmware, run on the Pi |
 
 Python env is managed with [uv](https://docs.astral.sh/uv/); the TUI is managed with
 [Cargo](https://doc.rust-lang.org/cargo/).
@@ -84,6 +84,7 @@ and no internal wiring.
 
 - [x] Pi flashed, SSH up, uv environment
 - [x] Monorepo and toolchains (uv, arduino-cli) on PC
+- [x] Arduino flashed from the Pi over USB (arduino-cli + udev rules on Pi)
 - [ ] ink v1 firmware (serial protocol, steppers)
 - [ ] tsup tracking loop (Skyfield to wheel speeds)
 - [ ] Mechanical build (deck, wedge mounts, cradle)

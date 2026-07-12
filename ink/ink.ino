@@ -38,7 +38,7 @@ void setup() {
 void step(int direction) {
     phase = (phase + direction) & 7;
     for (int i = 0; i < 12; i++)
-        digitalWrite(PINS[i], (HALFSTEP[phase] >> (11 - i)) & 1);
+        digitalWrite(PINS[i], (HALFSTEP[phase] >> (3 - (i % 4))) & 1);
 }
 
 void loop() {

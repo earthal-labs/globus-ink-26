@@ -1,6 +1,6 @@
 const int PROTOCOL_VERSION = 0;
 
-const int PINS[4] = { 2, 3, 4, 5 };
+const int PINS[12] = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
 
 const byte HALFSTEP[8] = {
     0b1000,
@@ -29,7 +29,7 @@ void setup() {
     Serial.begin(115200);
     Serial.print("ink p");
     Serial.println(PROTOCOL_VERSION);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 12; i++) {
         pinMode(PINS[i], OUTPUT);
     }
     nextStep = micros();
@@ -37,8 +37,8 @@ void setup() {
 
 void step(int direction) {
     phase = (phase + direction) & 7;
-    for (int i = 0; i < 4; i++)
-        digitalWrite(PINS[i], (HALFSTEP[phase] >> (3 - i)) & 1);
+    for (int i = 0; i < 12; i++)
+        digitalWrite(PINS[i], (HALFSTEP[phase] >> (11 - i)) & 1);
 }
 
 void loop() {

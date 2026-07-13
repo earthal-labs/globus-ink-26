@@ -24,11 +24,14 @@ DIR = [1, 1, 1]  # per-wheel direction sign - flip via calibration ritual, not b
 
 # --- Controller (sec. 4) ---
 TICK_HZ = 10
-GAIN_K = 0.5         # 1/s; larger = snappier retargets
-# Cap globe ω so wheel rates stay startable under load. ink.ino ramps toward
-# commanded rates; bringup spun at ~833 half-steps/s. This keeps ≈100
-# half-steps/s at the wheels until loaded tracking is retuned.
-OMEGA_MAX = 0.03
+# With θ only ~1–2° (nearly aligned), ω = GAIN_K·θ stays tiny unless GAIN is
+# assertive. Brought up for visible slews now that half-step @ ~833 is proven.
+GAIN_K = 2.0         # 1/s; larger = snappier retargets
+# Globe |ω| cap (rad/s). 0.03 was a stall-debug temporary and made wheel rates
+# ~10 steps/s — imperceptible on a 3 lb globe. 0.20 → roughly hundreds of
+# half-steps/s (under the bringup-proven 833). Raise toward 0.26 if slews feel
+# slow; drop if cold starts under load chug again.
+OMEGA_MAX = 0.20
 DEADBAND_DEG = 0.05   # TODO: asymmetric wake/sleep thresholds instead of one
 
 # --- Satellite tracking (sec. 7) ---

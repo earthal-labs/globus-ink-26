@@ -27,7 +27,7 @@ from kinematics import (
 )
 from config import (
     SATELLITES, DEFAULT_SATELLITE, TLE_MAX_AGE_DAYS, STATE_DIR,
-    TICK_HZ, GAIN_K, OMEGA_MAX, DEADBAND_DEG,
+    TICK_HZ, GAIN_K, OMEGA_MAX, DEADBAND_DEG, STEPS_PER_RAD, r,
 )
 
 STATE_PATH = Path(STATE_DIR) / "state.json"
@@ -222,7 +222,14 @@ def main(satellite_name=None):
 
             # Command the wheels (sec. 8, 9.1)
             rates = wheel_rates(ω)
-            print(f"θ={degrees(θ):.2f}° ω={ω} rates={rates}")
+            # Tip for the human eye: ~10 half-steps/s ≈ 0.5 mm/s at the rim —
+            # looks "dead" on a 3 lb globe even when ink is stepping correctly.
+            peak = max((abs(int(x)) for x in rates), default=0)
+            rim_mm_s = (peak / STEPS_PER_RAD) * r * 1000.0
+            print(
+                f"θ={degrees(θ):.2f}° rates={rates} "
+                f"|rates|_max={peak} rim≈{rim_mm_s:.1f}mm/s"
+            )
             link.send_rates(conn, rates)
 
             # Integrate ω_actual, not ω - quantization fix (sec. 5.2).

@@ -15,9 +15,9 @@ R = 0.0762                          # sphere radius, m (6" sphere)
 r = 0.029                           # wheel radius, m (58 mm Nexus omniwheel)
 α = 40                              # wheel contact ring angle below equator, degrees
 ψ = [0, 120, 240]                   # wheel azimuths, degrees (Y-drive, 120 deg apart)
-# Must match ink.ino production drive mode (default MODE_NAT_FULL).
-# Full-step: 2037.89 steps/rev. Half-step (nat_half / swap_half): use 4075.78.
-STEPS_PER_RAD = 2037.89 / (2 * pi)  # 28BYJ-48 FULL-step count / rev (true 63.684:1)
+# Must match ink.ino production drive mode (default MODE_NAT_HALF).
+# Half-step: 4075.78 steps/rev (bringup-proven). Full-step: 2037.89.
+STEPS_PER_RAD = 4075.78 / (2 * pi)  # 28BYJ-48 HALF-step count / rev (true 63.684:1)
 
 # --- Calibration (sec. 6.5) ---
 DIR = [1, 1, 1]  # per-wheel direction sign - flip via calibration ritual, not by guessing in your head
@@ -25,10 +25,9 @@ DIR = [1, 1, 1]  # per-wheel direction sign - flip via calibration ritual, not b
 # --- Controller (sec. 4) ---
 TICK_HZ = 10
 GAIN_K = 0.5         # 1/s; larger = snappier retargets
-# Cap globe ω so wheel rates stay startable under load. ink.ino now ramps
-# toward commanded rates (~250 steps/s²); still keep this conservative until
-# the shaft-spin bench passes. Was 0.26 (~450 steps/s) — too abrupt cold.
-# ~50 steps/s at the wheels with current STEPS_PER_RAD.
+# Cap globe ω so wheel rates stay startable under load. ink.ino ramps toward
+# commanded rates; bringup spun at ~833 half-steps/s. This keeps ≈100
+# half-steps/s at the wheels until loaded tracking is retuned.
 OMEGA_MAX = 0.03
 DEADBAND_DEG = 0.05   # TODO: asymmetric wake/sleep thresholds instead of one
 

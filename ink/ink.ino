@@ -4,11 +4,9 @@
 const int PROTOCOL_VERSION = 0;
 
 // Natural order: row position j maps straight to the board's INj+1 (D2->IN1
-// etc.). FULLSTEP below is the 28BYJ-48's native sequential two-coil
-// pattern, so no reordering is needed for production. The IN1-IN3-IN2-IN4
-// swap (PINS_SWAP) only compensates for Arduino Stepper.h's internal
-// pattern — but is offered as a bench mode in case a harness is wired that
-// way. (A briefly-committed production swap made motors hum in place.)
+// etc.). Production drive is NAT + HALFSTEP — same map as ink/bringup, which
+// is the firmware path that demonstrably rotates these motors. FULLSTEP and
+// the IN1-IN3-IN2-IN4 pin swap remain available as bench modes via D/T.
 const int PINS_NAT[3][4] = {
     { 2, 3, 4, 5 },
     { 6, 7, 8, 9 },
@@ -20,9 +18,9 @@ const int PINS_SWAP[3][4] = {
     { 10, 12, 11, 13 }
 };
 
-// Full-step: two coils always on (max torque). Half-step: 8-phase table with
-// single-coil phases (~30% less torque). STEPS_PER_RAD in tsup/config.py must
-// match whichever mode is locked as production (default: full-step).
+// Half-step is production: matches the freerunning bringup sketch. Full-step
+// remains for LED-crawl (clearer two-coil pairs). STEPS_PER_RAD in
+// tsup/config.py must stay on half-step (4075.78 / rev).
 const byte FULLSTEP[4] = {
     0b1100,
     0b0110,
@@ -45,10 +43,10 @@ const unsigned long COIL_RELEASE_MS = 2000UL; // idle this long -> de-energize t
 const unsigned long BENCH_HOLD_MS = 4000UL;   // T command self-hold (no host keepalive)
 const unsigned long CRAWL_DWELL_MS = 500UL;   // per-phase dwell so LED walk is eye-visible
 const unsigned long PROBE_HOLD_MS = 2000UL;   // single-IN LED probe duration
-const int BENCH_RATE = 40;                   // steps/s for T
+const int BENCH_RATE = 833;                  // steps/s for T — matches bringup STEP_US=1200
 const int CRAWL_CYCLES = 2;                  // full revolutions of the phase table
-const int RAMP_STEP = 5;                     // steps/s added toward |target| each ramp tick
-const unsigned long RAMP_INTERVAL_MS = 20UL;  // => ~250 steps/s^2 cold-start accel
+const int RAMP_STEP = 40;                    // steps/s added toward |target| each ramp tick
+const unsigned long RAMP_INTERVAL_MS = 20UL;  // => ~2000 steps/s^2 toward bringup speeds
 
 enum DriveMode : byte {
     MODE_NAT_FULL = 0,
@@ -57,7 +55,7 @@ enum DriveMode : byte {
     MODE_SWAP_HALF = 3
 };
 
-DriveMode driveMode = MODE_NAT_FULL;
+DriveMode driveMode = MODE_NAT_HALF;
 
 // int is 32-bit here (Renesas RA4M1), not 16-bit like classic AVR Uno.
 int targetRate[3] = { 0, 0, 0 };             // commanded steps/s (from V / T)
@@ -142,6 +140,21 @@ void setTargets(int r0, int r1, int r2) {
     targetRate[1] = r1;
     targetRate[2] = r2;
     lastCmdTime = millis();
+    // Seed ramped rates immediately so the first step after idle doesn't wait
+    // a full RAMP_INTERVAL (bringup has no ramp — motion starts at once).
+    for (int m = 0; m < 3; m++) {
+        int t = targetRate[m];
+        if (t == 0) {
+            rate[m] = 0;
+            continue;
+        }
+        if (rate[m] == 0 || ((rate[m] > 0) != (t > 0))) {
+            int seed = abs(t);
+            if (seed > RAMP_STEP) seed = RAMP_STEP;
+            rate[m] = (t > 0 ? 1 : -1) * seed;
+            lastRampMs[m] = millis();
+        }
+    }
 }
 
 void zeroTargets() {

@@ -348,26 +348,25 @@ Sanity identities to unit-test your implementation against:
 ### 6.4 Wheel speed to step rate
 
 Wheel angular speed Ω_i = v_i / r. The 28BYJ-48's true reduction is 63.684:1
-(not 64:1), giving **2037.89 full steps per output revolution** — not the
-folklore 2048. The 0.5 % discrepancy is invisible in projects that move and
-stop; yours integrates forever, and at 2048 the dead-reckoned q would drift
-~1° per 200° of globe travel. So:
+(not 64:1). Production ink uses **half-step** (matching the freerunning
+`ink/bringup` sketch that demonstrably spins these motors), giving
+**4075.78 half-steps per output revolution**. Full-step would be half that
+(2037.89). If the drive mode in `ink.ino` ever changes, this constant
+changes with it:
 
 ```
-STEPS_PER_RAD = 2037.89 / 2π ≈ 324.3
+STEPS_PER_RAD = 4075.78 / 2π ≈ 648.6
 rate_i (steps/s) = Ω_i · STEPS_PER_RAD        signed; sign = direction
 ```
 
-(Full-step drive — two coils always energized — not half-step: the
-single-coil phases of half-stepping have ~30% less torque, and under the
-globe's real load those weak phases stall. If the drive mode in `ink.ino`
-ever changes, this constant changes with it.)
+(Bench crawl still uses full-step patterns so the ULN LED pair walk is easy
+to see by eye. Production `V` commands use half-step.)
 
 Worked example so you know what "normal" looks like: the ISS ground track
 moves at |ω| ≈ 1.2 mrad/s. Wheel rim speeds ≈ R·1.2 mrad/s → Ω ≈ 3.2 mrad/s
-→ **≈ 2 steps/second per motor** while tracking. Slews run up to the ~450
-steps/s cap. Both are trivially within the motor's ability; the design
-margin lives everywhere.
+→ **≈ 4 half-steps/second per motor** while tracking. Slews run toward the
+motor's comfortable hundreds of steps/s. Both are within the motor's ability;
+the design margin lives everywhere.
 
 ### 6.5 Calibration day-one ritual
 
@@ -439,7 +438,7 @@ constants:
     r = 0.029           # wheel radius, m
     alpha = 40°
     psi = [0°, 120°, 240°]
-    STEPS_PER_RAD = 2037.89 / (2π)   # full-step count/rev - matches ink.ino's drive mode
+    STEPS_PER_RAD = 4075.78 / (2π)   # half-step count/rev - matches ink.ino / bringup
     DIR = [+1, +1, +1]  # per-wheel sign flips, set on calibration day
 
 build M:                # 3×3, constant
@@ -508,17 +507,14 @@ than folded into this pseudocode.
 
 ```
 constants:
-    FULLSTEP[4] = { 1100, 0110, 0011, 1001 }          # coil patterns,
-                                                      # IN1..IN4 per motor -
-                                                      # two coils always on
-                                                      # (max torque; see 6.4)
-    HALFSTEP[8] = { ... }                             # bench / optional
+    FULLSTEP[4] = { 1100, 0110, 0011, 1001 }          # LED crawl patterns
+    HALFSTEP[8] = { ... }                             # production drive
     pins_nat[3][4], pins_swap[3][4]                   # natural vs Stepper.h order
     RAMP_STEP / RAMP_INTERVAL_MS                      # cold-start accel
 
 state per motor: target_rate, rate (ramped steps/s, signed), phase,
                  next_step_time (µs), idle_since
-drive_mode: nat_full (default) | nat_half | swap_full | swap_half
+drive_mode: nat_half (default/production) | nat_full | swap_full | swap_half
 
 setup:
     pins to OUTPUT, Serial.begin(115200)

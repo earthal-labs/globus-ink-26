@@ -35,3 +35,8 @@ TLE_MAX_AGE_DAYS = 1.0
 SERIAL_PORT = "/dev/ttyACM0"  # varies per machine; ink.sh auto-detects this at flash time
 SERIAL_BAUD = 115200          # fixed by the wire protocol - don't change without ink.ino too
 SERIAL_BOOT_WAIT_S = 2        # ink resets when the port opens; wait for it before reading hello
+
+# --- vzor bridge (docs/bridge-protocol.md) ---
+BRIDGE_HOST = "127.0.0.1"  # loopback only - this drives real motors, never LAN-reachable
+BRIDGE_PORT = 8765
+PAN_WATCHDOG_MS = 300       # no PAN in this long -> treat rate as 0 (silence means stop)

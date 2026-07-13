@@ -11,12 +11,9 @@ license = "GPL-3.0-or-later"
 path = "src/lib.rs"
 
 [dependencies]
-ratatui = { version = "0.30.0", default-features = false, features = ["std"] }
-zstd = { version = "0.13", default-features = false }
-
-[dev-dependencies]
-crossterm = "0.29"
 ratatui = { version = "0.30.0", default-features = false, features = ["std", "crossterm"] }
+zstd = { version = "0.13", default-features = false }
+crossterm = "0.29"
 
 [build-dependencies]
 zstd = { version = "0.13", default-features = false }

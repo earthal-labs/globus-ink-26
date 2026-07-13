@@ -10,17 +10,19 @@ Distributed under the GPL-3.0-or-later License. See LICENSE for details.
 """
 
 import time
-from math import degrees, radians
+from math import degrees, radians, asin, atan2
 from pathlib import Path
 from json import loads, dumps, JSONDecodeError
+from queue import Empty
 
-from numpy import array
+from numpy import array, clip
 from numpy.linalg import norm
 from skyfield.api import Loader
 
 import link
+from bridge import Bridge
 from kinematics import (
-    wheel_rates, actual_omega, rotate, shortest_arc,
+    wheel_rates, actual_omega, rotate, conjugate, shortest_arc,
     from_axis_angle, multiply, normalize, latlon_to_body,
 )
 from config import (
@@ -105,9 +107,56 @@ def subpoint_latlon(satellite, now):
     return geo.latitude.degrees, geo.longitude.degrees
 
 
+def crosshair_latlon(q):
+    """Lat/lon currently under the crosshair - inverts latlon_to_body via q,
+    so switching into MANUAL (or reporting STATE) reflects where the globe
+    actually is, not an aspirational target."""
+    x, y, z = rotate(conjugate(q), ZHAT)
+    lat = degrees(asin(clip(z, -1.0, 1.0)))
+    lon = degrees(atan2(y, x))
+
+    return lat, lon
+
+
 def now_utc():
     """Current UTC instant, as a Skyfield time."""
     return ts.now()
+
+
+def apply_commands(commands, state):
+    """Drain the bridge's command queue into `state` (a dict - see main()).
+    Runs on the control-loop thread; every command here is a cheap local
+    update, never I/O (TLE fetches already happened on the bridge thread)."""
+    while True:
+        try:
+            cmd = commands.get_nowait()
+        except Empty:
+            return
+        tag = cmd[0]
+
+        if tag == "GOTO":
+            _, lat, lon = cmd
+            state["manual_lat"], state["manual_lon"] = lat, lon
+            state["mode"] = "MANUAL"
+
+        elif tag == "MODE":
+            _, new_mode = cmd
+            if new_mode == "MANUAL" and state["mode"] != "MANUAL":
+                # Seed from where the globe actually is - no jump on switch.
+                state["manual_lat"], state["manual_lon"] = crosshair_latlon(state["q"])
+            state["mode"] = new_mode
+
+        elif tag == "TRACK_READY":
+            _, name, satellite = cmd
+            state["satellite"], state["satellite_name"] = satellite, name
+            state["mode"] = "AUTO"
+
+        elif tag == "TRACK_ERROR":
+            _, message = cmd
+            print(f"track failed: {message}")
+
+        elif tag == "DISCONNECTED":
+            print("vzor disconnected")
 
 
 def main(satellite_name=None):
@@ -120,6 +169,19 @@ def main(satellite_name=None):
 
     conn = link.open_link()
     satellite = load_cached_tle(norad_id)
+    manual_lat, manual_lon = crosshair_latlon(q)
+
+    state = {
+        "q": q,
+        "mode": "AUTO",
+        "satellite": satellite,
+        "satellite_name": satellite_name or DEFAULT_SATELLITE,
+        "manual_lat": manual_lat,
+        "manual_lon": manual_lon,
+    }
+
+    bridge = Bridge(load_cached_tle)
+    bridge.start()
 
     last_tick = time.monotonic()
     last_save = last_tick
@@ -130,8 +192,20 @@ def main(satellite_name=None):
             Δt = tick_start - last_tick
             last_tick = tick_start
 
-            # Orbit -> target direction (sec. 3, 7)
-            φ, λ = subpoint_latlon(satellite, now_utc())
+            apply_commands(bridge.commands, state)
+            q = state["q"]
+
+            # Target direction (sec. 3, 7): satellite subpoint in AUTO,
+            # manual target (bridge-driven) in MANUAL.
+            if state["mode"] == "AUTO":
+                φ, λ = subpoint_latlon(state["satellite"], now_utc())
+            else:
+                lat_rate, lon_rate = bridge.pan_rate()
+                manual_lat = clip(state["manual_lat"] + lat_rate * Δt, -90.0, 90.0)
+                manual_lon = ((state["manual_lon"] + lon_rate * Δt + 180) % 360) - 180
+                state["manual_lat"], state["manual_lon"] = manual_lat, manual_lon
+                φ, λ = manual_lat, manual_lon
+
             p_b = latlon_to_body(φ, λ)
             u = rotate(q, p_b)
             axis, θ = shortest_arc(u, ZHAT)
@@ -153,6 +227,11 @@ def main(satellite_name=None):
                 # from_axis_angle wants degrees; mag * Δt is radians.
                 δq = from_axis_angle(ω_actual / mag, degrees(mag * Δt))
                 q = normalize(multiply(δq, q))
+            state["q"] = q
+
+            disp_lat, disp_lon = crosshair_latlon(q)
+            sat_name = state["satellite_name"] if state["mode"] == "AUTO" else None
+            bridge.set_state(disp_lat, disp_lon, sat_name, state["mode"])
 
             if tick_start - last_save > 60:
                 save_state(q)
@@ -166,8 +245,9 @@ def main(satellite_name=None):
         pass
     # TODO: SIGTERM won't hit this handler - add via `signal` if run as a service.
     finally:
+        bridge.stop()
         link.send_rates(conn, [0, 0, 0])
-        save_state(q)
+        save_state(state["q"])
 
 
 if __name__ == "__main__":

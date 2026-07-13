@@ -1,22 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Interactive dev-only demo: Tab toggles Auto/Manual, arrows steer in
-//! Manual (diagonals included), PageUp/PageDown zoom, Home eases back to
-//! (0, 0), End quits, "/" opens a command line. Not part of the production
-//! build - only compiled via `cargo run --example demo`, and its
-//! `crossterm` dependency is a [dev-dependency] so it never reaches the
-//! shipped binary.
+//! Vzor: the human-facing terminal for the Globus INK replica. Tab toggles
+//! Auto/Manual, arrows steer in Manual (diagonals included), PageUp/
+//! PageDown zoom, Home eases back to (0, 0), End quits, "/" opens a
+//! command line.
+//!
+//! While connected to tsup's bridge (see docs/bridge-protocol.md), the
+//! globe shown is the real one: `goto`/`lat`/`lon`/`home`/arrow-key
+//! steering and `track` all drive it over the wire, and the rendered
+//! position comes from tsup's own `STATE` broadcasts rather than being
+//! simulated here. When the bridge is unreachable, vzor falls back to a
+//! local placeholder simulation (unchanged from the pre-bridge dev demo)
+//! and marks the title bar `DISCONNECTED - simulated` for the whole time
+//! it isn't backed by a live feed - this app never quietly shows fake
+//! motion as if it were the real globe.
 //!
 //! Commands (typed after "/", Enter to run, Esc to cancel):
 //!   home              - same as the Home key
 //!   end               - same as the End key
 //!   mode [auto|manual] - toggles with no argument, or sets explicitly
 //!   zin / zout        - same as PageUp/PageDown
-//!   lon <deg>         - ease longitude to <deg>, keep current latitude
-//!   lat <deg>         - ease latitude to <deg>, keep current longitude
-//!   goto <lon> <lat>  - ease to both
-//!   track <id>        - record a satellite id (display only for now - no
-//!                       live orbit feed exists yet; see tsup's tracker loop)
+//!   lon <deg>         - go to longitude <deg>, keep current latitude
+//!   lat <deg>         - go to latitude <deg>, keep current longitude
+//!   goto <lon> <lat>  - go to both
+//!   track <id>        - switch tracked satellite by name or NORAD id
 //!   info              - what this terminal is and why it's named Vzor
 //!   help              - this command list, in-app
 //!
@@ -24,18 +31,15 @@
 //! arrow key, Home, or a lat/lon/goto command - since at that point the
 //! globe is no longer following whatever `track` last named.
 //!
-//! Auto mode auto-spins as a stand-in for live satellite orientation, which
-//! will eventually arrive over the tsup IPC bridge. Manual mode moves yaw/
-//! pitch at a fixed angular rate while an arrow key is held, rather than
-//! tracking a continuous drag delta, since the real globe is driven by
-//! stepper motors with a bounded angular rate - [`MANUAL_RADIANS_PER_SECOND`]
-//! is a placeholder until that rate is known from the ink firmware. Command-
-//! driven moves (home/lon/lat/goto) ease toward their target at the same
-//! kind of bounded rate rather than teleporting, for the same reason.
+//! Manual mode moves at a fixed angular rate while an arrow key is held,
+//! rather than tracking a continuous drag delta, since the real globe is
+//! driven by stepper motors with a bounded angular rate. Local simulated
+//! easing (used only while disconnected) follows the same reasoning.
 //!
-//! Pitch is unclamped and wraps like yaw: holding Up past the pole keeps
-//! rotating rather than hard-stopping, since the widget's rotation math is
-//! plain trigonometry with no gimbal singularity to protect against.
+//! Pitch is unclamped and wraps like yaw in the local simulation: holding
+//! Up past the pole keeps rotating rather than hard-stopping, since the
+//! widget's rotation math is plain trigonometry with no gimbal singularity
+//! to protect against.
 //!
 //! Terminals only report raw OS key-repeat as repeated Press events, with no
 //! true key-up - so "held" is inferred from how recently a Press for that
@@ -62,20 +66,28 @@ use ratatui::{
     text::Line,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
-use vzor::{Camera, Globe, MapData};
+use vzor::{Bridge, BridgeCommand, BridgeEvent, BridgeMode, Camera, Globe, MapData};
 
 const TAU: f32 = std::f32::consts::TAU;
 const TARGET_FPS: u64 = 30;
-/// Auto mode's placeholder spin rate, until live tracking data replaces it.
+/// Must match `BRIDGE_HOST`/`BRIDGE_PORT` in tsup/config.py.
+const BRIDGE_HOST: &str = "127.0.0.1";
+const BRIDGE_PORT: u16 = 8765;
+/// Auto mode's placeholder spin rate while disconnected, until a real
+/// `STATE` broadcast takes over.
 const AUTO_RADIANS_PER_SECOND: f32 = TAU / 25.0;
-/// Manual mode's steering rate while an arrow key is held down.
+/// Manual mode's local steering rate while disconnected (radians/sec).
 const MANUAL_RADIANS_PER_SECOND: f32 = 1.0;
-/// Rate for command-driven eases (home/x/y/goto) - deliberately slower than
-/// manual steering.
+/// Rate for local command-driven eases (home/lon/lat/goto) while
+/// disconnected - deliberately slower than manual steering.
 const EASE_RADIANS_PER_SECOND: f32 = 0.6;
 /// Once within this many radians of the target on both axes, an ease snaps
 /// exactly there.
 const EASE_EPSILON: f32 = 0.01;
+/// Real-world steering rate (degrees/sec) sent to tsup as `PAN` while an
+/// arrow key is held and connected - independent of the local simulation's
+/// radians-based rate above.
+const PAN_DEGREES_PER_SECOND: f32 = 30.0;
 /// A direction counts as "held" if a Press for it arrived within this
 /// window. Tune up if release still feels laggy on a given terminal.
 const HOLD_GRACE: Duration = Duration::from_millis(150);
@@ -89,6 +101,15 @@ const STATUS_TTL: Duration = Duration::from_millis(2500);
 enum Mode {
     Auto,
     Manual,
+}
+
+impl Mode {
+    fn to_bridge(self) -> BridgeMode {
+        match self {
+            Self::Auto => BridgeMode::Auto,
+            Self::Manual => BridgeMode::Manual,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,10 +142,10 @@ Commands (Enter to run, Esc to cancel):
   end                same as the End key
   mode [auto|manual] toggle, or set explicitly
   zin / zout         same as PageUp/PageDown
-  lon <deg>          ease longitude, keep latitude
-  lat <deg>          ease latitude, keep longitude
-  goto <lon> <lat>   ease to both
-  track <id>         record a satellite id (display only)
+  lon <deg>          go to longitude, keep latitude
+  lat <deg>          go to latitude, keep longitude
+  goto <lon> <lat>   go to both
+  track <id>         switch tracked satellite (name or NORAD id)
   info               about this terminal
   help               this list
 
@@ -141,9 +162,9 @@ struct HeldKeys {
 #[derive(Debug)]
 struct ViewState {
     mode: Mode,
-    /// Target (yaw, pitch) currently being eased toward, set by Home or by
-    /// the home/lon/lat/goto commands. Cleared once reached, or by any
-    /// arrow key.
+    /// Target (yaw, pitch) currently being eased toward - only used by the
+    /// local fallback simulation while disconnected. Set by Home or by the
+    /// home/lon/lat/goto commands, cleared once reached or by any arrow key.
     ease_target: Option<(f32, f32)>,
     yaw: f32,
     pitch: f32,
@@ -155,11 +176,16 @@ struct ViewState {
     /// Last command-line feedback message and when it was set; faded out
     /// after [`STATUS_TTL`].
     status: Option<(String, Instant)>,
-    /// Set by the `track` command. Display-only until a real orbit feed
-    /// exists.
+    /// While connected, mirrors tsup's own `STATE` broadcasts. While
+    /// disconnected, only set locally by the `track` command as a display
+    /// placeholder.
     tracked_satellite: Option<String>,
     /// Set by the `info`/`help` commands; dismissed by any key press.
     overlay: Option<Overlay>,
+    /// True from the moment the bridge thread reports a live connection
+    /// until it reports a disconnect - see the module doc comment's
+    /// "honesty" note.
+    connected: bool,
 }
 
 impl ViewState {
@@ -176,24 +202,26 @@ impl ViewState {
             status: None,
             tracked_satellite: None,
             overlay: None,
+            connected: false,
         }
     }
 }
 
 fn main() -> io::Result<()> {
     let map = MapData::embedded();
+    let bridge = Bridge::connect(BRIDGE_HOST, BRIDGE_PORT);
     let mut stdout = io::stdout();
     enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen)?;
     let mut term = Terminal::new(CrosstermBackend::new(stdout))?;
-    let result = run(&mut term, &map);
+    let result = run(&mut term, &map, &bridge);
     disable_raw_mode()?;
     execute!(term.backend_mut(), LeaveAlternateScreen)?;
     term.show_cursor()?;
     result
 }
 
-fn run(term: &mut Terminal<CrosstermBackend<io::Stdout>>, map: &MapData) -> io::Result<()> {
+fn run(term: &mut Terminal<CrosstermBackend<io::Stdout>>, map: &MapData, bridge: &Bridge) -> io::Result<()> {
     let frame_dt = Duration::from_millis(1000 / TARGET_FPS);
     let mut state = ViewState::new(Instant::now());
     loop {
@@ -201,7 +229,16 @@ fn run(term: &mut Terminal<CrosstermBackend<io::Stdout>>, map: &MapData) -> io::
         let dt = now.duration_since(state.last_tick).as_secs_f32();
         state.last_tick = now;
 
-        update(&mut state, now, dt);
+        for event in bridge.poll_events() {
+            apply_bridge_event(&mut state, event);
+        }
+
+        // Real STATE broadcasts drive yaw/pitch while connected; the local
+        // simulation only runs as the disconnected fallback (see module docs).
+        if !state.connected {
+            update(&mut state, now, dt);
+        }
+        maybe_send_pan(&state, bridge, now);
 
         let camera = Camera {
             yaw: state.yaw,
@@ -222,14 +259,21 @@ fn run(term: &mut Terminal<CrosstermBackend<io::Stdout>>, map: &MapData) -> io::
                 Mode::Manual => "manual".to_string(),
             };
             let title = format!(" Vzor Terminal - {mode_label} - home - end ");
-            let tracking = match &state.tracked_satellite {
-                Some(id) => format!(" tracking {id} "),
-                None => String::new(),
+            // The disconnected badge takes priority over the tracking badge
+            // in the same corner - while disconnected, "tracking X" would
+            // itself be a simulated claim, which is exactly what this
+            // indicator exists to never show unmarked.
+            let status_badge = if !state.connected {
+                " DISCONNECTED - simulated ".to_string()
+            } else if let Some(id) = &state.tracked_satellite {
+                format!(" tracking {id} ")
+            } else {
+                String::new()
             };
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title_top(Line::from(title).left_aligned())
-                .title_top(Line::from(tracking).right_aligned())
+                .title_top(Line::from(status_badge).right_aligned())
                 .title_bottom(Line::from(bottom_left).left_aligned())
                 .title_bottom(Line::from(format_latlon(lat, lon)).right_aligned());
             let inner = block.inner(area);
@@ -248,7 +292,7 @@ fn run(term: &mut Terminal<CrosstermBackend<io::Stdout>>, map: &MapData) -> io::
         while event::poll(Duration::ZERO)? {
             if let Event::Key(k) = event::read()?
                 && k.kind == KeyEventKind::Press
-                && handle_key(&mut state, k.code, k.modifiers, now)
+                && handle_key(&mut state, bridge, k.code, k.modifiers, now)
             {
                 return Ok(());
             }
@@ -258,8 +302,69 @@ fn run(term: &mut Terminal<CrosstermBackend<io::Stdout>>, map: &MapData) -> io::
     }
 }
 
+/// Applies one bridge connection/state event to `state`.
+fn apply_bridge_event(state: &mut ViewState, event: BridgeEvent) {
+    match event {
+        BridgeEvent::Connected => {
+            state.connected = true;
+            // Local easing is suspended while connected (see `update`), but
+            // any target left over from just before connecting would
+            // otherwise sit stale and then resume driving the simulation
+            // from an outdated position if the connection later drops.
+            state.ease_target = None;
+        }
+        BridgeEvent::Disconnected => state.connected = false,
+        BridgeEvent::State(s) => {
+            state.yaw = lon_to_yaw(s.lon);
+            state.pitch = lat_to_pitch(s.lat);
+            state.tracked_satellite = s.satellite;
+            state.mode = match s.mode.as_str() {
+                "MANUAL" => Mode::Manual,
+                _ => Mode::Auto,
+            };
+        }
+    }
+}
+
+/// Sends a `PAN` command for the currently-held arrow keys, every frame
+/// they're held (matching tsup's own PAN watchdog: silence means stop, so
+/// this can't be a send-once-on-press event). No-op while disconnected or
+/// not in Manual - there's nothing live to steer.
+fn maybe_send_pan(state: &ViewState, bridge: &Bridge, now: Instant) {
+    if !state.connected || state.mode != Mode::Manual {
+        return;
+    }
+    let is_held = |t: Option<Instant>| t.is_some_and(|t| now.duration_since(t) < HOLD_GRACE);
+    let mut lat_rate = 0.0;
+    let mut lon_rate = 0.0;
+    if is_held(state.held.up) {
+        lat_rate += PAN_DEGREES_PER_SECOND;
+    }
+    if is_held(state.held.down) {
+        lat_rate -= PAN_DEGREES_PER_SECOND;
+    }
+    // Right/Left map to -/+ longitude, matching this crate's existing
+    // yaw<->longitude convention (`lon_to_yaw` negates) so connected and
+    // locally-simulated steering feel identical to the same key presses.
+    if is_held(state.held.right) {
+        lon_rate -= PAN_DEGREES_PER_SECOND;
+    }
+    if is_held(state.held.left) {
+        lon_rate += PAN_DEGREES_PER_SECOND;
+    }
+    if lat_rate != 0.0 || lon_rate != 0.0 {
+        bridge.send(BridgeCommand::Pan { lat_rate, lon_rate });
+    }
+}
+
 /// Applies a key press to `state`. Returns `true` if the program should quit.
-fn handle_key(state: &mut ViewState, code: KeyCode, modifiers: KeyModifiers, now: Instant) -> bool {
+fn handle_key(
+    state: &mut ViewState,
+    bridge: &Bridge,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    now: Instant,
+) -> bool {
     if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
         return true;
     }
@@ -272,7 +377,7 @@ fn handle_key(state: &mut ViewState, code: KeyCode, modifiers: KeyModifiers, now
             KeyCode::Esc => state.command_input = None,
             KeyCode::Enter => {
                 let cmd = state.command_input.take().unwrap_or_default();
-                return execute_command(state, &cmd, now);
+                return execute_command(state, bridge, &cmd, now);
             }
             KeyCode::Backspace => {
                 if let Some(buf) = state.command_input.as_mut() {
@@ -298,12 +403,19 @@ fn handle_key(state: &mut ViewState, code: KeyCode, modifiers: KeyModifiers, now
                 Mode::Manual => Mode::Auto,
             };
             state.ease_target = None;
+            if state.connected {
+                bridge.send(BridgeCommand::Mode(state.mode.to_bridge()));
+            }
         }
         KeyCode::PageUp => state.zoom = (state.zoom * ZOOM_STEP).min(ZOOM_MAX),
         KeyCode::PageDown => state.zoom = (state.zoom / ZOOM_STEP).max(ZOOM_MIN),
         KeyCode::Home if state.mode == Mode::Manual => {
-            state.ease_target = Some((0.0, 0.0));
             state.tracked_satellite = None;
+            if state.connected {
+                bridge.send(BridgeCommand::Goto { lat: 0.0, lon: 0.0 });
+            } else {
+                state.ease_target = Some((0.0, 0.0));
+            }
         }
         KeyCode::Left if state.mode == Mode::Manual => {
             state.ease_target = None;
@@ -333,7 +445,7 @@ fn handle_key(state: &mut ViewState, code: KeyCode, modifiers: KeyModifiers, now
 /// Parses and runs one command-line entry. Returns `true` if the program
 /// should quit. Unrecognized commands or bad arguments set `state.status`
 /// with a usage/error message instead of taking any action.
-fn execute_command(state: &mut ViewState, input: &str, now: Instant) -> bool {
+fn execute_command(state: &mut ViewState, bridge: &Bridge, input: &str, now: Instant) -> bool {
     let mut parts = input.split_whitespace();
     let Some(cmd) = parts.next() else {
         return false;
@@ -342,38 +454,59 @@ fn execute_command(state: &mut ViewState, input: &str, now: Instant) -> bool {
     match cmd {
         "home" => {
             state.mode = Mode::Manual;
-            state.ease_target = Some((0.0, 0.0));
             state.tracked_satellite = None;
+            if state.connected {
+                bridge.send(BridgeCommand::Goto { lat: 0.0, lon: 0.0 });
+            } else {
+                state.ease_target = Some((0.0, 0.0));
+            }
         }
         "end" => return true,
-        "mode" => match args.first().copied() {
-            None => {
-                state.mode = match state.mode {
+        "mode" => {
+            let new_mode = match args.first().copied() {
+                None => Some(match state.mode {
                     Mode::Auto => Mode::Manual,
                     Mode::Manual => Mode::Auto,
-                };
+                }),
+                Some("auto") => Some(Mode::Auto),
+                Some("manual") => Some(Mode::Manual),
+                Some(other) => {
+                    state.status = Some((format!("mode: unknown '{other}' (use auto/manual)"), now));
+                    None
+                }
+            };
+            if let Some(new_mode) = new_mode {
+                state.mode = new_mode;
+                if state.connected {
+                    bridge.send(BridgeCommand::Mode(new_mode.to_bridge()));
+                }
             }
-            Some("auto") => state.mode = Mode::Auto,
-            Some("manual") => state.mode = Mode::Manual,
-            Some(other) => {
-                state.status = Some((format!("mode: unknown '{other}' (use auto/manual)"), now));
-            }
-        },
+        }
         "zin" => state.zoom = (state.zoom * ZOOM_STEP).min(ZOOM_MAX),
         "zout" => state.zoom = (state.zoom / ZOOM_STEP).max(ZOOM_MIN),
         "lon" => match args.first().and_then(|s| s.parse::<f32>().ok()) {
             Some(lon) => {
                 state.mode = Mode::Manual;
-                state.ease_target = Some((lon_to_yaw(lon), state.pitch));
                 state.tracked_satellite = None;
+                if state.connected {
+                    let (lat, _) = center_latlon(state.yaw, state.pitch);
+                    bridge.send(BridgeCommand::Goto { lat, lon });
+                } else {
+                    state.ease_target = Some((lon_to_yaw(lon), state.pitch));
+                }
             }
             None => state.status = Some(("lon: usage: lon <degrees>".to_string(), now)),
         },
         "lat" => match args.first().and_then(|s| s.parse::<f32>().ok()) {
             Some(lat) => {
                 state.mode = Mode::Manual;
-                state.ease_target = Some((state.yaw, lat_to_pitch(lat)));
                 state.tracked_satellite = None;
+                if state.connected {
+                    let (_, lon) = center_latlon(state.yaw, state.pitch);
+                    bridge.send(BridgeCommand::Goto { lat, lon });
+                } else {
+                    state.ease_target = Some((state.yaw, lat_to_pitch(lat)));
+                }
             }
             None => state.status = Some(("lat: usage: lat <degrees>".to_string(), now)),
         },
@@ -383,8 +516,12 @@ fn execute_command(state: &mut ViewState, input: &str, now: Instant) -> bool {
             match (lon, lat) {
                 (Some(lon), Some(lat)) => {
                     state.mode = Mode::Manual;
-                    state.ease_target = Some((lon_to_yaw(lon), lat_to_pitch(lat)));
                     state.tracked_satellite = None;
+                    if state.connected {
+                        bridge.send(BridgeCommand::Goto { lat, lon });
+                    } else {
+                        state.ease_target = Some((lon_to_yaw(lon), lat_to_pitch(lat)));
+                    }
                 }
                 _ => {
                     state.status = Some(("goto: usage: goto <lon> <lat>".to_string(), now));
@@ -393,11 +530,16 @@ fn execute_command(state: &mut ViewState, input: &str, now: Instant) -> bool {
         }
         "track" => match args.first() {
             Some(id) => {
-                state.tracked_satellite = Some((*id).to_string());
-                state.status = Some((
-                    format!("tracking '{id}' (display only - no live orbit feed yet)"),
-                    now,
-                ));
+                if state.connected {
+                    bridge.send(BridgeCommand::Track((*id).to_string()));
+                    state.status = Some((format!("requested track '{id}'"), now));
+                } else {
+                    state.tracked_satellite = Some((*id).to_string());
+                    state.status = Some((
+                        format!("tracking '{id}' (simulated - not connected to tsup)"),
+                        now,
+                    ));
+                }
             }
             None => state.status = Some(("track: usage: track <satellite id>".to_string(), now)),
         },
@@ -417,7 +559,7 @@ fn lat_to_pitch(lat_deg: f32) -> f32 {
 }
 
 /// Advances auto-spin, manual steering, and command-driven easing by one
-/// frame of `dt`.
+/// frame of `dt`. Only runs while disconnected - see the module doc comment.
 fn update(state: &mut ViewState, now: Instant, dt: f32) {
     match state.mode {
         Mode::Auto => {

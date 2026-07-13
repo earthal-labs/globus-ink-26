@@ -19,6 +19,9 @@ use ratatui::{
     buffer::Buffer, layout::Rect, style::Color, symbols::braille::BRAILLE, widgets::Widget,
 };
 
+pub mod bridge;
+pub use bridge::{Bridge, BridgeCommand, BridgeEvent, BridgeMode, BridgeState};
+
 /// `LINE_STRIP` restart sentinel - mirrors WebGL2's `PRIMITIVE_RESTART_FIXED_INDEX`
 /// for `UNSIGNED_INT` element buffers. The shipped `land_contour_indices.gl`
 /// buffer doesn't actually contain any of these; we synthesize them at load

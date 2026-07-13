@@ -42,14 +42,15 @@ Two computers, named for their Soviet counterparts:
     [tui-globe](https://github.com/d10n/tui-globe) (see [Acknowledgments](#acknowledgments)).
     Named for the periscope-style optical sighting instrument flown alongside the real
     Globus INK aboard Soyuz. Renders the live globe orientation as a braille globe in the
-    terminal and will feed manual-control input back into the tracker loop. Rust/Cargo;
-    in progress.
+    terminal and feeds manual-control input (goto/pan/track) back into the tracker loop
+    over a local TCP bridge. Rust/Cargo.
 - **`ink/`** — ИНК (the instrument). C++ firmware on the Arduino Nano. Deliberately
   dumb: receives three signed wheel speeds, generates step pulses, reports faults.
   Knows nothing about satellites.
 
-The serial contract lives in [`docs/protocol.md`](docs/protocol.md). Changing that
-file is the only event that requires a firmware reflash.
+The serial contract lives in [`docs/protocol.md`](docs/protocol.md); changing that
+file is the only event that requires a firmware reflash. The vzor/tsup bridge
+contract lives in [`docs/bridge-protocol.md`](docs/bridge-protocol.md).
 
 ## Structure
 
@@ -58,7 +59,7 @@ file is the only event that requires a firmware reflash.
 | `tsup/` | Python: main tracker loop, kinematics, config, serial link |
 | `tsup/vzor/` | Rust: terminal UI (Vzor), forked from `tui-globe` |
 | `ink/` | Arduino firmware (`arduino-cli`, fqbn `arduino:renesas_uno:nanor4`) |
-| `docs/` | `protocol.md`, the tsup/ink serial contract |
+| `docs/` | `protocol.md` (tsup/ink serial), `bridge-protocol.md` (vzor/tsup) |
 | `hardware/` | Mount STLs, wiring notes, BOM |
 | `scripts/` | `ink.sh` - compile/upload/monitor the firmware, run on the Pi |
 
@@ -85,10 +86,10 @@ and no internal wiring.
 - [x] Pi flashed, SSH up, uv environment
 - [x] Monorepo and toolchains (uv, arduino-cli) on PC
 - [x] Arduino flashed from the Pi over USB (arduino-cli + udev rules on Pi)
-- [ ] ink v1 firmware (serial protocol, steppers)
-- [ ] tsup tracking loop (Skyfield to wheel speeds)
+- [x] ink v1 firmware (serial protocol, steppers)
+- [x] tsup tracking loop (Skyfield to wheel speeds)
 - [ ] Mechanical build (deck, wedge mounts, cradle)
-- [ ] vzor manual-control bridge into the tracker loop
+- [x] vzor manual-control bridge into the tracker loop
 
 ## Acknowledgments
 

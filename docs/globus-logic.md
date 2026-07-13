@@ -494,6 +494,11 @@ loop at 10 Hz:
 on exit / signal:  send "V 0 0 0", atomic_save(q)
 ```
 
+This is the AUTO-mode core; the manual/vzor extension (a second target source
+feeding the same `shortest_arc`/controller pipeline, plus the bridge socket
+that drives it) is documented separately in `docs/bridge-protocol.md` rather
+than folded into this pseudocode.
+
 ### 9.3 `ink.ino` — the firmware
 
 ```

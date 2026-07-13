@@ -2,7 +2,7 @@
 
 This is the theory manual for the tracking system. It explains *why* each piece
 exists, derives the math you will implement, and ends with pseudocode for the
-three modules you will write: `kinematics.py`, `tracker.py` (tsup), and
+three modules you will write: `kinematics.py`, `main.py` (tsup), and
 `ink.ino` (firmware). Nothing here is code you can paste; everything here is
 reasoning you can code against.
 
@@ -462,7 +462,7 @@ function shortest_arc(u, ẑ) -> (axis, θ):         # Section 3
     return c/|c|, atan2(|c|, dot(u, ẑ))
 ```
 
-### 9.2 `tracker.py` — the tsup loop
+### 9.2 `main.py` — the tsup loop
 
 ```
 startup:

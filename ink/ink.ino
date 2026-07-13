@@ -149,6 +149,14 @@ void stepMotors() {
         if (nowUs >= nextStepTime[m]) {
             phase[m] = (phase[m] + (rate[m] > 0 ? 1 : -1)) & 7;
             writeCoils(m, HALFSTEP[phase[m]]);
+            // TEMP DEBUG - prints every real step so we can see, not infer
+            // from LEDs, whether the phase is genuinely advancing.
+            Serial.print("STEP m=");
+            Serial.print(m);
+            Serial.print(" phase=");
+            Serial.print(phase[m]);
+            Serial.print(" pattern=0b");
+            Serial.println(HALFSTEP[phase[m]], BIN);
             nextStepTime[m] += interval; // += , not = : no drift
         }
     }

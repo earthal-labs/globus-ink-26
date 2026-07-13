@@ -406,11 +406,11 @@ Reasoning about rates and freshness:
 ## 8. The division of labor, restated as an interface
 
 tsup thinks; ink pulses. The interface between them is three signed integers
-at 115200 baud (protocol v1):
+at 115200 baud (protocol v0):
 
 ```
 tsup → ink : "V s1 s2 s3\n"      step rates, steps/s, signed
-ink → tsup : "ink p1\n"          hello + protocol version, on boot
+ink → tsup : "ink p0\n"          hello + protocol version, on boot
 ink → tsup : (fault lines, later)
 ```
 
@@ -507,7 +507,7 @@ state per motor: rate (steps/s, signed), phase (0..7),
 
 setup:
     pins to OUTPUT, Serial.begin(115200)
-    print "ink p1"
+    print "ink p0"
 
 loop:                                                 # no delay() anywhere
     if serial line available:

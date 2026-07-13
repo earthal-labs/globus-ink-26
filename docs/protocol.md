@@ -7,7 +7,7 @@
 | Message | Direction | Meaning |
 |---|---|---|
 | `ink p0` | ink → tsup | hello on boot: protocol version 0 |
-| `V wx wy wz` | tsup → ink | wheel speeds, steps/sec, signed |
+| `V s1 s2 s3` | tsup → ink | wheel speeds, steps/sec, signed |
 
 ## Rules
 

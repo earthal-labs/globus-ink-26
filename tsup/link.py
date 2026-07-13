@@ -1,9 +1,9 @@
 """
 Globus Link.
 
-Serial connection to ink: opens the port, verifies the protocol hello, and
-sends wheel-rate commands. See docs/protocol.md and docs/globus-logic.md
-section 8.
+Serial connection to ink: opens the port, queries and verifies the protocol
+version, and sends wheel-rate commands. See docs/protocol.md and
+docs/globus-logic.md section 8.
 
 Distributed under the GPL-3.0-or-later License. See LICENSE for details.
 """
@@ -18,9 +18,17 @@ PROTOCOL_VERSION = 0
 
 
 def open_link(port=None, baud=None):
-    """Open the serial port and verify ink's boot hello."""
+    """Open the serial port and verify ink's protocol version.
+
+    Actively queries with "P" rather than relying on ink's one-shot boot
+    hello: native-USB boards (e.g. the Nano R4) drop the whole USB
+    connection on reset, so a freshly-opened connection has no reliable way
+    to catch a broadcast tied to reset timing it may not even have caused.
+    """
     conn = Serial(port or SERIAL_PORT, baud or SERIAL_BAUD, timeout=5)
-    time.sleep(SERIAL_BOOT_WAIT_S)  # port-open resets ink
+    time.sleep(SERIAL_BOOT_WAIT_S)  # let the connection settle before writing
+    conn.reset_input_buffer()  # discard any stray hello already sitting in the buffer
+    conn.write(b"P\n")
 
     hello = conn.readline().decode(errors="replace").strip()
     try:

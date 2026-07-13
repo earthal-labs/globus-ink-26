@@ -66,6 +66,23 @@ class TestOpenLink(unittest.TestCase):
         _, kwargs = mock_serial.call_args
         self.assertIsNotNone(kwargs.get("timeout"))
 
+    def test_sends_a_version_query(self):
+        # open_link() actively asks rather than relying on catching ink's
+        # one-shot boot hello at exactly the right moment (unreliable on
+        # native-USB boards, which drop the connection on reset).
+        fake = fake_serial(b"ink p0\n")
+        with patch("link.Serial", return_value=fake):
+            link.open_link()
+        fake.write.assert_called_once_with(b"P\n")
+
+    def test_clears_stale_input_before_querying(self):
+        # A stray hello from setup() may already be sitting in the buffer -
+        # discard it so the next readline() is definitely the query response.
+        fake = fake_serial(b"ink p0\n")
+        with patch("link.Serial", return_value=fake):
+            link.open_link()
+        self.assertTrue(fake.reset_input_buffer.called)
+
     def test_version_mismatch_raises_and_closes(self):
         fake = fake_serial(b"ink p1\n")
         with patch("link.Serial", return_value=fake):

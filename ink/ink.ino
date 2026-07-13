@@ -33,10 +33,14 @@ char lineBuf[40];
 byte lineLen = 0;
 bool lineOverflowed = false;
 
-void setup() {
-    Serial.begin(115200);
+void printHello() {
     Serial.print("ink p");
     Serial.println(PROTOCOL_VERSION);
+}
+
+void setup() {
+    Serial.begin(115200);
+    printHello();
     for (int m = 0; m < 3; m++)
         for (int j = 0; j < 4; j++)
             pinMode(PINS[m][j], OUTPUT);
@@ -49,10 +53,20 @@ void writeCoils(int motor, byte pattern) {
         digitalWrite(PINS[motor][j], (pattern >> (3 - j)) & 1);
 }
 
-// Parses "V s1 s2 s3". Any malformed line is rejected whole - rate[] and
-// lastCmdTime stay untouched, so corruption can't masquerade as a valid
-// zero command and quietly defeat the watchdog.
+// Parses "V s1 s2 s3" and "P". Any malformed line is rejected whole -
+// rate[] and lastCmdTime stay untouched, so corruption can't masquerade
+// as a valid zero command and quietly defeat the watchdog.
 void parseAndApply(char *buf) {
+    // Answers a version query on demand, rather than relying solely on the
+    // one-shot setup() hello - native-USB boards drop the whole connection
+    // on reset (no separate bridge chip holding it open through one like
+    // classic AVR boards), so a fresh connection can't reliably assume it
+    // caught that broadcast at exactly the right moment.
+    if (buf[0] == 'P' && buf[1] == '\0') {
+        printHello();
+        return;
+    }
+
     if (buf[0] != 'V' || buf[1] != ' ') return;
 
     long values[3];

@@ -2,10 +2,15 @@
 
 const int PROTOCOL_VERSION = 0;
 
+// Order is IN1, IN3, IN2, IN4 per motor, not the "obvious" IN1-IN4 - the
+// 28BYJ-48's coils are internally wound such that stepping them in wiring
+// order produces a valid-looking but non-rotating pattern (motor buzzes/
+// clicks in place). Physical pins are unchanged (D2-D5, D6-D9, D10-D13);
+// only which position in each row maps to which board header moved.
 const int PINS[3][4] = {
-    { 2, 3, 4, 5 },
-    { 6, 7, 8, 9 },
-    { 10, 11, 12, 13 }
+    { 2, 4, 3, 5 },
+    { 6, 8, 7, 9 },
+    { 10, 12, 11, 13 }
 };
 
 const byte HALFSTEP[8] = {

@@ -59,6 +59,7 @@ contract lives in [`docs/bridge-protocol.md`](docs/bridge-protocol.md).
 | `tsup/` | Python: main tracker loop, kinematics, config, serial link |
 | `tsup/vzor/` | Rust: terminal UI (Vzor), forked from `tui-globe` |
 | `ink/` | Arduino firmware (`arduino-cli`, fqbn `arduino:renesas_uno:nanor4`) |
+| `ink/bringup/` | Freerunning motor-0 A/B sketch (`scripts/ink.sh bringup`) |
 | `docs/` | `protocol.md` (tsup/ink serial), `bridge-protocol.md` (vzor/tsup) |
 | `hardware/` | Mount STLs, wiring notes, BOM |
 | `scripts/` | `ink.sh` - compile/upload/monitor the firmware, run on the Pi |

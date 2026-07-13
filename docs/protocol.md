@@ -9,12 +9,20 @@
 | `ink p0` | ink → tsup | hello on boot, and in response to `P` |
 | `P` | tsup → ink | query protocol version |
 | `V s1 s2 s3` | tsup → ink | wheel speeds, steps/sec, signed |
+| `D mode` | tsup → ink | select coil map: `nat_full`, `nat_half`, `swap_full`, `swap_half` |
+| `ink d mode` | ink → tsup | ack of `D` / `T` drive mode |
+| `T m mode` | tsup → ink | self-held bench: motor `m` (0–2) at 40 steps/s for 4 s |
 
 tsup queries with `P` rather than relying solely on the boot-time hello:
 native-USB boards (e.g. the Nano R4) drop the whole USB connection on
 reset - unlike classic AVR boards with a separate bridge chip that stays
 connected through one - so a freshly-opened connection has no reliable way
 to catch a broadcast tied to reset timing it may not even have caused.
+
+`D` / `T` are additive bench messages: production `tsup` never sends them;
+old firmware that only accepts `P`/`V` ignores them. Default drive mode is
+`nat_full` (natural IN1–IN4 pin order, two-coil full-step). Use
+`tsup/force_spin.py` to try each mode and lock the winner in `ink.ino`.
 
 ## Rules
 

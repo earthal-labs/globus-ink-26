@@ -1,50 +1,112 @@
 #include <stdlib.h> // strtol; being explicit rather than assuming Arduino.h pulls it in
+#include <string.h> // strcmp
 
 const int PROTOCOL_VERSION = 0;
 
 // Natural order: row position j maps straight to the board's INj+1 (D2->IN1
 // etc.). FULLSTEP below is the 28BYJ-48's native sequential two-coil
-// pattern, so no reordering is needed here - the well-known
-// "IN1-IN3-IN2-IN4" swap only compensates for Arduino Stepper.h's internal
-// pattern, which we don't use. (A briefly-committed swap here made the
-// motors hum in place instead of rotate - two "corrections" cancel out.)
-const int PINS[3][4] = {
+// pattern, so no reordering is needed for production. The IN1-IN3-IN2-IN4
+// swap (PINS_SWAP) only compensates for Arduino Stepper.h's internal
+// pattern — but is offered as a bench mode in case a harness is wired that
+// way. (A briefly-committed production swap made motors hum in place.)
+const int PINS_NAT[3][4] = {
     { 2, 3, 4, 5 },
     { 6, 7, 8, 9 },
     { 10, 11, 12, 13 }
 };
+const int PINS_SWAP[3][4] = {
+    { 2, 4, 3, 5 },
+    { 6, 8, 7, 9 },
+    { 10, 12, 11, 13 }
+};
 
-// Full-step, two coils always energized - maximum torque on every step.
-// Half-stepping (the 8-entry variant) alternates in single-coil phases
-// with ~30% less torque; under the globe's real load at our supply
-// voltage those weak phases stall (motor hums in place). Full-step is
-// what the original bring-up sketch that demonstrably spun the globe
-// used. STEPS_PER_RAD in tsup/config.py must match this mode.
+// Full-step: two coils always on (max torque). Half-step: 8-phase table with
+// single-coil phases (~30% less torque). STEPS_PER_RAD in tsup/config.py must
+// match whichever mode is locked as production (default: full-step).
 const byte FULLSTEP[4] = {
     0b1100,
     0b0110,
     0b0011,
     0b1001
 };
+const byte HALFSTEP[8] = {
+    0b1000,
+    0b1100,
+    0b0100,
+    0b0110,
+    0b0010,
+    0b0011,
+    0b0001,
+    0b1001
+};
 
-const unsigned long WATCHDOG_MS = 500UL;      // no V command in this long -> all rates 0
+const unsigned long WATCHDOG_MS = 500UL;      // no V/T command in this long -> all rates 0
 const unsigned long COIL_RELEASE_MS = 2000UL; // idle this long -> de-energize that motor
+const unsigned long BENCH_HOLD_MS = 4000UL;   // T command self-hold (no host keepalive)
+const int BENCH_RATE = 40;                   // steps/s — slow enough to see LED walk
+const int RAMP_STEP = 5;                     // steps/s added toward |target| each ramp tick
+const unsigned long RAMP_INTERVAL_MS = 20UL;  // => ~250 steps/s^2 cold-start accel
+
+enum DriveMode : byte {
+    MODE_NAT_FULL = 0,
+    MODE_NAT_HALF = 1,
+    MODE_SWAP_FULL = 2,
+    MODE_SWAP_HALF = 3
+};
+
+DriveMode driveMode = MODE_NAT_FULL;
 
 // int is 32-bit here (Renesas RA4M1), not 16-bit like classic AVR Uno.
-int rate[3] = { 0, 0, 0 };
+int targetRate[3] = { 0, 0, 0 };             // commanded steps/s (from V / T)
+int rate[3] = { 0, 0, 0 };                   // ramped steps/s actually used to step
 int phase[3] = { 0, 0, 0 };
 unsigned long nextStepTime[3] = { 0, 0, 0 }; // micros() scale, per motor
 unsigned long idleSince[3] = { 0, 0, 0 };    // millis() scale, per motor
+unsigned long lastRampMs[3] = { 0, 0, 0 };
 unsigned long lastCmdTime = 0;               // millis() scale, for the watchdog
-int stepCount[3] = { 0, 0, 0 };              // TEMP DEBUG - throttles STEP prints
+unsigned long benchUntil = 0;                // millis(); T holds watchdog until then
 
-char lineBuf[40];
+char lineBuf[48];
 byte lineLen = 0;
 bool lineOverflowed = false;
+
+bool isHalfMode() {
+    return driveMode == MODE_NAT_HALF || driveMode == MODE_SWAP_HALF;
+}
+
+bool isSwapMode() {
+    return driveMode == MODE_SWAP_FULL || driveMode == MODE_SWAP_HALF;
+}
+
+int phaseMask() {
+    return isHalfMode() ? 7 : 3;
+}
+
+const byte *stepTable() {
+    return isHalfMode() ? HALFSTEP : FULLSTEP;
+}
 
 void printHello() {
     Serial.print("ink p");
     Serial.println(PROTOCOL_VERSION);
+}
+
+void printDriveMode() {
+    Serial.print("ink d ");
+    switch (driveMode) {
+        case MODE_NAT_FULL:  Serial.println("nat_full");  break;
+        case MODE_NAT_HALF:  Serial.println("nat_half");  break;
+        case MODE_SWAP_FULL: Serial.println("swap_full"); break;
+        case MODE_SWAP_HALF: Serial.println("swap_half"); break;
+    }
+}
+
+bool parseDriveMode(const char *name, DriveMode *out) {
+    if (strcmp(name, "nat_full") == 0)  { *out = MODE_NAT_FULL;  return true; }
+    if (strcmp(name, "nat_half") == 0)  { *out = MODE_NAT_HALF;  return true; }
+    if (strcmp(name, "swap_full") == 0) { *out = MODE_SWAP_FULL; return true; }
+    if (strcmp(name, "swap_half") == 0) { *out = MODE_SWAP_HALF; return true; }
+    return false;
 }
 
 void setup() {
@@ -52,27 +114,72 @@ void setup() {
     printHello();
     for (int m = 0; m < 3; m++)
         for (int j = 0; j < 4; j++)
-            pinMode(PINS[m][j], OUTPUT);
+            pinMode(PINS_NAT[m][j], OUTPUT); // NAT and SWAP use the same 12 pins
 }
 
-// Writes a 4-bit coil pattern to a motor's pins (IN1 = MSB). pattern=0
-// de-energizes; pattern=FULLSTEP[phase[m]] steps.
+// Writes a 4-bit coil pattern to a motor's pins (IN1 = MSB under natural
+// mapping). pattern=0 de-energizes.
 void writeCoils(int motor, byte pattern) {
+    const int (*pins)[4] = isSwapMode() ? PINS_SWAP : PINS_NAT;
     for (int j = 0; j < 4; j++)
-        digitalWrite(PINS[motor][j], (pattern >> (3 - j)) & 1);
+        digitalWrite(pins[motor][j], (pattern >> (3 - j)) & 1);
 }
 
-// Parses "V s1 s2 s3" and "P". Any malformed line is rejected whole -
-// rate[] and lastCmdTime stay untouched, so corruption can't masquerade
-// as a valid zero command and quietly defeat the watchdog.
+void setTargets(int r0, int r1, int r2) {
+    targetRate[0] = r0;
+    targetRate[1] = r1;
+    targetRate[2] = r2;
+    lastCmdTime = millis();
+}
+
+void zeroTargets() {
+    setTargets(0, 0, 0);
+    rate[0] = rate[1] = rate[2] = 0;
+}
+
+// Parses "V s1 s2 s3", "P", "D mode", "T m mode". Malformed lines are
+// rejected whole so corruption can't quietly defeat the watchdog.
 void parseAndApply(char *buf) {
-    // Answers a version query on demand, rather than relying solely on the
-    // one-shot setup() hello - native-USB boards drop the whole connection
-    // on reset (no separate bridge chip holding it open through one like
-    // classic AVR boards), so a fresh connection can't reliably assume it
-    // caught that broadcast at exactly the right moment.
     if (buf[0] == 'P' && buf[1] == '\0') {
         printHello();
+        return;
+    }
+
+    // "D mode" — select coil map for all subsequent stepping (bench + prod).
+    if (buf[0] == 'D' && buf[1] == ' ') {
+        DriveMode mode;
+        if (!parseDriveMode(buf + 2, &mode)) return;
+        driveMode = mode;
+        for (int m = 0; m < 3; m++)
+            phase[m] &= phaseMask();
+        printDriveMode();
+        lastCmdTime = millis();
+        return;
+    }
+
+    // "T m mode" — self-held single-motor bench spin (no host keepalive).
+    if (buf[0] == 'T' && buf[1] == ' ') {
+        char *endptr;
+        long motor = strtol(buf + 2, &endptr, 10);
+        if (endptr == buf + 2 || *endptr != ' ') return;
+        if (motor < 0 || motor > 2) return;
+        DriveMode mode;
+        if (!parseDriveMode(endptr + 1, &mode)) return;
+        driveMode = mode;
+        phase[motor] &= phaseMask();
+        int rates[3] = { 0, 0, 0 };
+        rates[motor] = BENCH_RATE;
+        setTargets(rates[0], rates[1], rates[2]);
+        // Start the ramp near the bench rate so the LED walk is immediate,
+        // but still allow ramp logic to kick in if target is later raised.
+        rate[0] = rate[1] = rate[2] = 0;
+        rate[motor] = BENCH_RATE;
+        benchUntil = millis() + BENCH_HOLD_MS;
+        printDriveMode();
+        Serial.print("ink t m=");
+        Serial.print((int)motor);
+        Serial.print(" rate=");
+        Serial.println(BENCH_RATE);
         return;
     }
 
@@ -92,10 +199,8 @@ void parseAndApply(char *buf) {
         }
     }
 
-    rate[0] = (int)values[0];
-    rate[1] = (int)values[1];
-    rate[2] = (int)values[2];
-    lastCmdTime = millis();
+    setTargets((int)values[0], (int)values[1], (int)values[2]);
+    benchUntil = 0; // host-driven V takes over from any self-held T
 }
 
 // Non-blocking, byte at a time - Serial.readStringUntil() blocks up to 1s
@@ -120,16 +225,53 @@ void handleSerial() {
 }
 
 void applyWatchdog() {
+    if (millis() < benchUntil) return; // T self-hold still active
     if (millis() - lastCmdTime > WATCHDOG_MS) {
-        rate[0] = 0;
-        rate[1] = 0;
-        rate[2] = 0;
+        zeroTargets();
+    }
+}
+
+// Ramps |rate| toward |targetRate| so cold 28BYJ-48 starts don't stall when
+// tsup jumps straight to a high command (no AccelStepper — same idea in-line).
+void applyRamp() {
+    unsigned long now = millis();
+    for (int m = 0; m < 3; m++) {
+        int target = targetRate[m];
+        if (target == 0) {
+            rate[m] = 0;
+            lastRampMs[m] = now;
+            continue;
+        }
+        // Sign flip: snap through zero and ramp up in the new direction.
+        if (rate[m] != 0 && ((rate[m] > 0) != (target > 0))) {
+            rate[m] = 0;
+            lastRampMs[m] = now;
+            continue;
+        }
+        if (now - lastRampMs[m] < RAMP_INTERVAL_MS) continue;
+        lastRampMs[m] = now;
+
+        int absTarget = abs(target);
+        int absRate = abs(rate[m]);
+        int sign = target > 0 ? 1 : -1;
+        if (absRate < absTarget) {
+            absRate += RAMP_STEP;
+            if (absRate > absTarget) absRate = absTarget;
+            // Don't crawl at 1 step/s under load — start usefully.
+            if (absRate < RAMP_STEP) absRate = RAMP_STEP;
+            if (absRate > absTarget) absRate = absTarget;
+        } else if (absRate > absTarget) {
+            absRate = absTarget;
+        }
+        rate[m] = sign * absRate;
     }
 }
 
 void stepMotors() {
     unsigned long nowMs = millis();
     unsigned long nowUs = micros();
+    const byte *table = stepTable();
+    int mask = phaseMask();
 
     for (int m = 0; m < 3; m++) {
         if (rate[m] == 0) {
@@ -151,21 +293,8 @@ void stepMotors() {
         }
 
         if (nowUs >= nextStepTime[m]) {
-            phase[m] = (phase[m] + (rate[m] > 0 ? 1 : -1)) & 3;
-            writeCoils(m, FULLSTEP[phase[m]]);
-            // TEMP DEBUG - throttled to every 100th step. Printing EVERY
-            // step deadlocked the whole link: if the host lags reading,
-            // Serial.print blocks (USB CDC TX full), freezing this loop -
-            // so ink stops reading commands, so the host's writes back up,
-            // and both sides wait on each other forever. Coils latch on
-            // whatever pattern the freeze landed on (the "solid LED").
-            if (++stepCount[m] >= 100) {
-                stepCount[m] = 0;
-                Serial.print("STEP m=");
-                Serial.print(m);
-                Serial.print(" steps=100 phase=");
-                Serial.println(phase[m]);
-            }
+            phase[m] = (phase[m] + (rate[m] > 0 ? 1 : -1)) & mask;
+            writeCoils(m, table[phase[m]]);
             nextStepTime[m] += interval; // += , not = : no drift
         }
     }
@@ -174,5 +303,6 @@ void stepMotors() {
 void loop() {
     handleSerial();
     applyWatchdog();
+    applyRamp();
     stepMotors();
 }

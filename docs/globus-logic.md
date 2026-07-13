@@ -512,10 +512,13 @@ constants:
                                                       # IN1..IN4 per motor -
                                                       # two coils always on
                                                       # (max torque; see 6.4)
-    pins[3][4] = { ... }                              # 12 GPIO assignments
+    HALFSTEP[8] = { ... }                             # bench / optional
+    pins_nat[3][4], pins_swap[3][4]                   # natural vs Stepper.h order
+    RAMP_STEP / RAMP_INTERVAL_MS                      # cold-start accel
 
-state per motor: rate (steps/s, signed), phase (0..3),
+state per motor: target_rate, rate (ramped steps/s, signed), phase,
                  next_step_time (µs), idle_since
+drive_mode: nat_full (default) | nat_half | swap_full | swap_half
 
 setup:
     pins to OUTPUT, Serial.begin(115200)
@@ -523,11 +526,14 @@ setup:
 
 loop:                                                 # no delay() anywhere
     if serial line available:
-        parse "V s1 s2 s3"; on success update rates, last_cmd_time
-        (on parse failure: ignore line, optionally report fault)
+        parse "V s1 s2 s3" -> target rates, last_cmd_time
+        parse "D mode" / "T m mode"                   # bench only; see protocol.md
+        (on parse failure: ignore line)
 
-    if now − last_cmd_time > 500 ms:                  # watchdog
+    if now − last_cmd_time > 500 ms (and no T hold):  # watchdog
         all rates = 0
+
+    ramp |rate| toward |target_rate| (~250 steps/s²)
 
     for each motor m:
         if rate[m] == 0:
@@ -535,14 +541,18 @@ loop:                                                 # no delay() anywhere
             continue
         interval = 1e6 / |rate[m]|                     # µs per step
         if now ≥ next_step_time[m]:
-            phase[m] += sign(rate[m])  (mod 4)
-            write FULLSTEP[phase[m]] to pins[m]
+            phase[m] += sign(rate[m])  (mod 4 or 8)
+            write table[phase[m]] to pins for drive_mode
             next_step_time[m] += interval              # += not =, no drift
 ```
 
 The `+=` in the last line matters: setting `next = now + interval` accumulates
 scheduling jitter into position error; `next += interval` makes the long-run
 average rate exact — the firmware-level cousin of Section 5.2.
+
+Bench sequence isolation (hum / no rotation): `cd tsup && uv run python force_spin.py`
+tries each drive mode on each motor. A/B freerunning hardware path without the
+`V` parser: flash `ink/bringup` (see that sketch's header comments).
 
 ---
 

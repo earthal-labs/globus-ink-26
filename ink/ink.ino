@@ -3,8 +3,8 @@
 const int PROTOCOL_VERSION = 0;
 
 // Natural order: row position j maps straight to the board's INj+1 (D2->IN1
-// etc.). HALFSTEP below is already the 28BYJ-48's native sequential
-// half-step pattern, so no reordering is needed here - the well-known
+// etc.). FULLSTEP below is the 28BYJ-48's native sequential two-coil
+// pattern, so no reordering is needed here - the well-known
 // "IN1-IN3-IN2-IN4" swap only compensates for Arduino Stepper.h's internal
 // pattern, which we don't use. (A briefly-committed swap here made the
 // motors hum in place instead of rotate - two "corrections" cancel out.)
@@ -14,14 +14,16 @@ const int PINS[3][4] = {
     { 10, 11, 12, 13 }
 };
 
-const byte HALFSTEP[8] = {
-    0b1000,
+// Full-step, two coils always energized - maximum torque on every step.
+// Half-stepping (the 8-entry variant) alternates in single-coil phases
+// with ~30% less torque; under the globe's real load at our supply
+// voltage those weak phases stall (motor hums in place). Full-step is
+// what the original bring-up sketch that demonstrably spun the globe
+// used. STEPS_PER_RAD in tsup/config.py must match this mode.
+const byte FULLSTEP[4] = {
     0b1100,
-    0b0100,
     0b0110,
-    0b0010,
     0b0011,
-    0b0001,
     0b1001
 };
 
@@ -54,7 +56,7 @@ void setup() {
 }
 
 // Writes a 4-bit coil pattern to a motor's pins (IN1 = MSB). pattern=0
-// de-energizes; pattern=HALFSTEP[phase[m]] steps.
+// de-energizes; pattern=FULLSTEP[phase[m]] steps.
 void writeCoils(int motor, byte pattern) {
     for (int j = 0; j < 4; j++)
         digitalWrite(PINS[motor][j], (pattern >> (3 - j)) & 1);
@@ -149,8 +151,8 @@ void stepMotors() {
         }
 
         if (nowUs >= nextStepTime[m]) {
-            phase[m] = (phase[m] + (rate[m] > 0 ? 1 : -1)) & 7;
-            writeCoils(m, HALFSTEP[phase[m]]);
+            phase[m] = (phase[m] + (rate[m] > 0 ? 1 : -1)) & 3;
+            writeCoils(m, FULLSTEP[phase[m]]);
             // TEMP DEBUG - throttled to every 100th step. Printing EVERY
             // step deadlocked the whole link: if the host lags reading,
             // Serial.print blocks (USB CDC TX full), freezing this loop -

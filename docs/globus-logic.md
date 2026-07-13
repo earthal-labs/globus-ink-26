@@ -348,15 +348,20 @@ Sanity identities to unit-test your implementation against:
 ### 6.4 Wheel speed to step rate
 
 Wheel angular speed Ω_i = v_i / r. The 28BYJ-48's true reduction is 63.684:1
-(not 64:1), giving **4075.77 half-steps per output revolution** — not the
-folklore 4096. The 0.5 % discrepancy is invisible in projects that move and
-stop; yours integrates forever, and at 4096 the dead-reckoned q would drift
+(not 64:1), giving **2037.89 full steps per output revolution** — not the
+folklore 2048. The 0.5 % discrepancy is invisible in projects that move and
+stop; yours integrates forever, and at 2048 the dead-reckoned q would drift
 ~1° per 200° of globe travel. So:
 
 ```
-STEPS_PER_RAD = 4075.77 / 2π ≈ 648.7
+STEPS_PER_RAD = 2037.89 / 2π ≈ 324.3
 rate_i (steps/s) = Ω_i · STEPS_PER_RAD        signed; sign = direction
 ```
+
+(Full-step drive — two coils always energized — not half-step: the
+single-coil phases of half-stepping have ~30% less torque, and under the
+globe's real load those weak phases stall. If the drive mode in `ink.ino`
+ever changes, this constant changes with it.)
 
 Worked example so you know what "normal" looks like: the ISS ground track
 moves at |ω| ≈ 1.2 mrad/s. Wheel rim speeds ≈ R·1.2 mrad/s → Ω ≈ 3.2 mrad/s
@@ -434,7 +439,7 @@ constants:
     r = 0.029           # wheel radius, m
     alpha = 40°
     psi = [0°, 120°, 240°]
-    STEPS_PER_RAD = 4075.77 / (2π)
+    STEPS_PER_RAD = 2037.89 / (2π)   # full-step count/rev - matches ink.ino's drive mode
     DIR = [+1, +1, +1]  # per-wheel sign flips, set on calibration day
 
 build M:                # 3×3, constant
@@ -503,11 +508,13 @@ than folded into this pseudocode.
 
 ```
 constants:
-    HALFSTEP[8] = { 1000, 1100, 0100, 0110,          # coil patterns
-                    0010, 0011, 0001, 1001 }          # IN1..IN4 per motor
+    FULLSTEP[4] = { 1100, 0110, 0011, 1001 }          # coil patterns,
+                                                      # IN1..IN4 per motor -
+                                                      # two coils always on
+                                                      # (max torque; see 6.4)
     pins[3][4] = { ... }                              # 12 GPIO assignments
 
-state per motor: rate (steps/s, signed), phase (0..7),
+state per motor: rate (steps/s, signed), phase (0..3),
                  next_step_time (µs), idle_since
 
 setup:
@@ -528,8 +535,8 @@ loop:                                                 # no delay() anywhere
             continue
         interval = 1e6 / |rate[m]|                     # µs per step
         if now ≥ next_step_time[m]:
-            phase[m] += sign(rate[m])  (mod 8)
-            write HALFSTEP[phase[m]] to pins[m]
+            phase[m] += sign(rate[m])  (mod 4)
+            write FULLSTEP[phase[m]] to pins[m]
             next_step_time[m] += interval              # += not =, no drift
 ```
 

@@ -8,9 +8,10 @@ See docs/globus-logic.md for the derivations.
 Distributed under the GPL-3.0-or-later License. See LICENSE for details.
 """
 
+from math import cos, sin, radians, atan2, pi
+
 from numpy import array, cross
 from numpy.linalg import inv, norm
-from math import cos, sin, radians, atan2, pi
 
 from config import R, r, α, ψ, STEPS_PER_RAD, DIR
 

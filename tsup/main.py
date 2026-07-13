@@ -16,6 +16,7 @@ from json import loads, dumps, JSONDecodeError
 
 from numpy import array
 from numpy.linalg import norm
+from skyfield.api import Loader
 
 import link
 from kinematics import (
@@ -26,8 +27,6 @@ from config import (
     SATELLITES, DEFAULT_SATELLITE, TLE_MAX_AGE_DAYS,
     TICK_HZ, GAIN_K, OMEGA_MAX, DEADBAND_DEG,
 )
-
-from skyfield.api import Loader
 
 STATE_PATH = Path(__file__).parent / "data" / "state.json"
 ZHAT = array([0, 0, 1])

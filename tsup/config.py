@@ -40,3 +40,11 @@ SERIAL_BOOT_WAIT_S = 2        # ink resets when the port opens; wait for it befo
 BRIDGE_HOST = "127.0.0.1"  # loopback only - this drives real motors, never LAN-reachable
 BRIDGE_PORT = 8765
 PAN_WATCHDOG_MS = 300       # no PAN in this long -> treat rate as 0 (silence means stop)
+
+# --- Persisted state (sec. 5.3) ---
+# On a Pi running the overlay filesystem (root is RAM-backed, changes don't
+# survive reboot), this must point somewhere outside the overlay or q0 gets
+# silently lost every reboot. /boot/firmware is deliberately left off the
+# overlay for exactly this reason - see docs/globus-logic.md sec. 5.3.
+# On any other machine (dev/test), just a local path - override if needed.
+STATE_DIR = "/boot/firmware/globus-state"

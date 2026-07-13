@@ -26,18 +26,22 @@ from kinematics import (
     from_axis_angle, multiply, normalize, latlon_to_body,
 )
 from config import (
-    SATELLITES, DEFAULT_SATELLITE, TLE_MAX_AGE_DAYS,
+    SATELLITES, DEFAULT_SATELLITE, TLE_MAX_AGE_DAYS, STATE_DIR,
     TICK_HZ, GAIN_K, OMEGA_MAX, DEADBAND_DEG,
 )
 
-STATE_PATH = Path(__file__).parent / "data" / "state.json"
+STATE_PATH = Path(STATE_DIR) / "state.json"
+# TLE cache lives separately from STATE_PATH - it's fine to lose on reboot
+# (load_cached_tle() just re-fetches), so it stays under the overlay rather
+# than competing for space on /boot/firmware.
+TLE_CACHE_DIR = Path(__file__).parent / "data"
 ZHAT = array([0, 0, 1])
 DEADBAND = radians(DEADBAND_DEG)
 
 TLE_URL_TEMPLATE = "https://celestrak.org/NORAD/elements/gp.php?CATNR={}&FORMAT=TLE"
 
 # Shared across load_cached_tle()/now_utc() - avoid rebuilding per call.
-loader = Loader(str(STATE_PATH.parent))
+loader = Loader(str(TLE_CACHE_DIR))
 ts = loader.timescale()
 
 

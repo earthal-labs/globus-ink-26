@@ -30,3 +30,8 @@ DEADBAND_DEG = 0.05   # TODO: asymmetric wake/sleep thresholds instead of one
 SATELLITES = {"ISS": 25544}  # name -> NORAD catalog id; add more here
 DEFAULT_SATELLITE = "ISS"
 TLE_MAX_AGE_DAYS = 1.0
+
+# --- Serial link to ink (docs/protocol.md) ---
+SERIAL_PORT = "/dev/ttyACM0"  # varies per machine; ink.sh auto-detects this at flash time
+SERIAL_BAUD = 115200          # fixed by the wire protocol - don't change without ink.ino too
+SERIAL_BOOT_WAIT_S = 2        # ink resets when the port opens; wait for it before reading hello

@@ -8,27 +8,36 @@ section 8.
 Distributed under the GPL-3.0-or-later License. See LICENSE for details.
 """
 
+import time
+
+from serial import Serial
+
+from config import SERIAL_PORT, SERIAL_BAUD, SERIAL_BOOT_WAIT_S
+
 PROTOCOL_VERSION = 0
 
 
-def open_link(port="/dev/ttyACM0", baud=115200):
-    """
-    Open the serial port and verify ink's boot hello.
+def open_link(port=None, baud=None):
+    """Open the serial port and verify ink's boot hello."""
+    conn = Serial(port or SERIAL_PORT, baud or SERIAL_BAUD, timeout=5)
+    time.sleep(SERIAL_BOOT_WAIT_S)  # port-open resets ink
 
-    TODO: pyserial Serial(port, baud); the port opening resets ink, so wait
-    ~2s before reading; readline() the boot line ("ink p{N}\\n"); parse N
-    and assert it equals PROTOCOL_VERSION - refuse to proceed on a
-    mismatch (docs/protocol.md's rule, not optional). Return the open
-    connection.
-    """
-    raise NotImplementedError
+    hello = conn.readline().decode(errors="replace").strip()
+    try:
+        version = int(hello.removeprefix("ink p"))
+    except ValueError:
+        conn.close()
+        raise RuntimeError(f"unexpected boot line from ink: {hello!r}")
+
+    if version != PROTOCOL_VERSION:
+        conn.close()
+        raise RuntimeError(
+            f"protocol mismatch: tsup expects v{PROTOCOL_VERSION}, ink is v{version}"
+        )
+
+    return conn
 
 
 def send_rates(conn, rates):
-    """
-    Send a signed wheel-rate command: "V s1 s2 s3\\n".
-
-    TODO: format `rates` (three ints, steps/s) into that message and
-    write() it to `conn`.
-    """
-    raise NotImplementedError
+    """Send a signed wheel-rate command: "V s1 s2 s3\\n"."""
+    conn.write(f"V {rates[0]} {rates[1]} {rates[2]}\n".encode())

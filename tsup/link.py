@@ -15,6 +15,7 @@ from serial import Serial
 from config import SERIAL_PORT, SERIAL_BAUD, SERIAL_BOOT_WAIT_S
 
 PROTOCOL_VERSION = 0
+HELLO_SCAN_LINES = 20  # max non-hello lines to skip while hunting the P response
 
 
 def open_link(port=None, baud=None):
@@ -30,7 +31,15 @@ def open_link(port=None, baud=None):
     conn.reset_input_buffer()  # discard any stray hello already sitting in the buffer
     conn.write(b"P\n")
 
-    hello = conn.readline().decode(errors="replace").strip()
+    # Skip any in-flight non-hello lines (e.g. debug output printed between
+    # the buffer reset and ink processing the query) rather than failing on
+    # the first one. An empty read is a real timeout - nothing is coming.
+    hello = ""
+    for _ in range(HELLO_SCAN_LINES):
+        hello = conn.readline().decode(errors="replace").strip()
+        if not hello or hello.startswith("ink p"):
+            break
+
     try:
         version = int(hello.removeprefix("ink p"))
     except ValueError:

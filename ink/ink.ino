@@ -33,6 +33,7 @@ int phase[3] = { 0, 0, 0 };
 unsigned long nextStepTime[3] = { 0, 0, 0 }; // micros() scale, per motor
 unsigned long idleSince[3] = { 0, 0, 0 };    // millis() scale, per motor
 unsigned long lastCmdTime = 0;               // millis() scale, for the watchdog
+int stepCount[3] = { 0, 0, 0 };              // TEMP DEBUG - throttles STEP prints
 
 char lineBuf[40];
 byte lineLen = 0;
@@ -149,14 +150,19 @@ void stepMotors() {
         if (nowUs >= nextStepTime[m]) {
             phase[m] = (phase[m] + (rate[m] > 0 ? 1 : -1)) & 7;
             writeCoils(m, HALFSTEP[phase[m]]);
-            // TEMP DEBUG - prints every real step so we can see, not infer
-            // from LEDs, whether the phase is genuinely advancing.
-            Serial.print("STEP m=");
-            Serial.print(m);
-            Serial.print(" phase=");
-            Serial.print(phase[m]);
-            Serial.print(" pattern=0b");
-            Serial.println(HALFSTEP[phase[m]], BIN);
+            // TEMP DEBUG - throttled to every 100th step. Printing EVERY
+            // step deadlocked the whole link: if the host lags reading,
+            // Serial.print blocks (USB CDC TX full), freezing this loop -
+            // so ink stops reading commands, so the host's writes back up,
+            // and both sides wait on each other forever. Coils latch on
+            // whatever pattern the freeze landed on (the "solid LED").
+            if (++stepCount[m] >= 100) {
+                stepCount[m] = 0;
+                Serial.print("STEP m=");
+                Serial.print(m);
+                Serial.print(" steps=100 phase=");
+                Serial.println(phase[m]);
+            }
             nextStepTime[m] += interval; // += , not = : no drift
         }
     }

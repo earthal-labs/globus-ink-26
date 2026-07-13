@@ -43,7 +43,10 @@ const byte HALFSTEP[8] = {
 const unsigned long WATCHDOG_MS = 500UL;      // no V/T command in this long -> all rates 0
 const unsigned long COIL_RELEASE_MS = 2000UL; // idle this long -> de-energize that motor
 const unsigned long BENCH_HOLD_MS = 4000UL;   // T command self-hold (no host keepalive)
-const int BENCH_RATE = 40;                   // steps/s — slow enough to see LED walk
+const unsigned long CRAWL_DWELL_MS = 500UL;   // per-phase dwell so LED walk is eye-visible
+const unsigned long PROBE_HOLD_MS = 2000UL;   // single-IN LED probe duration
+const int BENCH_RATE = 40;                   // steps/s for T
+const int CRAWL_CYCLES = 2;                  // full revolutions of the phase table
 const int RAMP_STEP = 5;                     // steps/s added toward |target| each ramp tick
 const unsigned long RAMP_INTERVAL_MS = 20UL;  // => ~250 steps/s^2 cold-start accel
 
@@ -64,7 +67,16 @@ unsigned long nextStepTime[3] = { 0, 0, 0 }; // micros() scale, per motor
 unsigned long idleSince[3] = { 0, 0, 0 };    // millis() scale, per motor
 unsigned long lastRampMs[3] = { 0, 0, 0 };
 unsigned long lastCmdTime = 0;               // millis() scale, for the watchdog
-unsigned long benchUntil = 0;                // millis(); T holds watchdog until then
+unsigned long benchUntil = 0;                // millis(); T/C/I hold watchdog until then
+
+// Slow visual crawl: advances FULLSTEP one phase every CRAWL_DWELL_MS.
+int crawlMotor = -1;
+int crawlPhase = 0;
+int crawlStepsLeft = 0;
+unsigned long crawlNextMs = 0;
+
+// Single-IN probe: lights exactly one driver input so wiring can be verified.
+int probeMotor = -1;
 
 char lineBuf[48];
 byte lineLen = 0;
@@ -137,8 +149,23 @@ void zeroTargets() {
     rate[0] = rate[1] = rate[2] = 0;
 }
 
-// Parses "V s1 s2 s3", "P", "D mode", "T m mode". Malformed lines are
-// rejected whole so corruption can't quietly defeat the watchdog.
+void stopBenchEffects() {
+    if (crawlMotor >= 0) writeCoils(crawlMotor, 0);
+    if (probeMotor >= 0) writeCoils(probeMotor, 0);
+    crawlMotor = -1;
+    crawlStepsLeft = 0;
+    probeMotor = -1;
+}
+
+void printPatternBits(byte pattern) {
+    // IN1..IN4 as 1/0 so the host can confirm the eye-visible LED pair.
+    for (int j = 0; j < 4; j++)
+        Serial.print((pattern >> (3 - j)) & 1);
+}
+
+// Parses "V s1 s2 s3", "P", "D mode", "T m mode", "C m", "I m j".
+// Malformed lines are rejected whole so corruption can't quietly defeat
+// the watchdog.
 void parseAndApply(char *buf) {
     if (buf[0] == 'P' && buf[1] == '\0') {
         printHello();
@@ -157,6 +184,60 @@ void parseAndApply(char *buf) {
         return;
     }
 
+    // "C m" — slow full-step crawl so the LED pair walk is visible by eye.
+    // Uses NATURAL pins + FULLSTEP only (production map). Self-held.
+    if (buf[0] == 'C' && buf[1] == ' ') {
+        char *endptr;
+        long motor = strtol(buf + 2, &endptr, 10);
+        if (endptr == buf + 2 || *endptr != '\0') return;
+        if (motor < 0 || motor > 2) return;
+        stopBenchEffects();
+        zeroTargets();
+        driveMode = MODE_NAT_FULL;
+        for (int m = 0; m < 3; m++)
+            writeCoils(m, 0);
+        crawlMotor = (int)motor;
+        crawlPhase = 0;
+        crawlStepsLeft = 4 * CRAWL_CYCLES;
+        crawlNextMs = millis();
+        benchUntil = millis() + (unsigned long)crawlStepsLeft * CRAWL_DWELL_MS + 500UL;
+        lastCmdTime = millis();
+        Serial.print("ink c m=");
+        Serial.println(crawlMotor);
+        return;
+    }
+
+    // "I m j" — light only motor m's INj (j=1..4) for PROBE_HOLD_MS.
+    // Exactly one ULN LED must turn on; any other result = wiring fault.
+    if (buf[0] == 'I' && buf[1] == ' ') {
+        char *endptr;
+        long motor = strtol(buf + 2, &endptr, 10);
+        if (endptr == buf + 2 || *endptr != ' ') return;
+        if (motor < 0 || motor > 2) return;
+        char *injStart = endptr + 1;
+        long inj = strtol(injStart, &endptr, 10);
+        if (endptr == injStart || *endptr != '\0') return;
+        if (inj < 1 || inj > 4) return;
+        stopBenchEffects();
+        zeroTargets();
+        driveMode = MODE_NAT_FULL;
+        for (int m = 0; m < 3; m++)
+            writeCoils(m, 0);
+        probeMotor = (int)motor;
+        byte pattern = (byte)(1 << (4 - inj)); // IN1=0b1000 .. IN4=0b0001
+        writeCoils(probeMotor, pattern);
+        benchUntil = millis() + PROBE_HOLD_MS;
+        lastCmdTime = millis();
+        Serial.print("ink i m=");
+        Serial.print(probeMotor);
+        Serial.print(" IN");
+        Serial.print((int)inj);
+        Serial.print(" bits=");
+        printPatternBits(pattern);
+        Serial.println();
+        return;
+    }
+
     // "T m mode" — self-held single-motor bench spin (no host keepalive).
     if (buf[0] == 'T' && buf[1] == ' ') {
         char *endptr;
@@ -165,6 +246,7 @@ void parseAndApply(char *buf) {
         if (motor < 0 || motor > 2) return;
         DriveMode mode;
         if (!parseDriveMode(endptr + 1, &mode)) return;
+        stopBenchEffects();
         driveMode = mode;
         phase[motor] &= phaseMask();
         int rates[3] = { 0, 0, 0 };
@@ -199,8 +281,9 @@ void parseAndApply(char *buf) {
         }
     }
 
+    stopBenchEffects();
     setTargets((int)values[0], (int)values[1], (int)values[2]);
-    benchUntil = 0; // host-driven V takes over from any self-held T
+    benchUntil = 0; // host-driven V takes over from any self-held bench
 }
 
 // Non-blocking, byte at a time - Serial.readStringUntil() blocks up to 1s
@@ -225,10 +308,41 @@ void handleSerial() {
 }
 
 void applyWatchdog() {
-    if (millis() < benchUntil) return; // T self-hold still active
+    if (millis() < benchUntil) return; // T/C/I self-hold still active
     if (millis() - lastCmdTime > WATCHDOG_MS) {
+        if (probeMotor >= 0) {
+            writeCoils(probeMotor, 0);
+            probeMotor = -1;
+        }
+        stopBenchEffects();
         zeroTargets();
     }
+}
+
+void runCrawl() {
+    if (crawlMotor < 0) return;
+    unsigned long now = millis();
+    if (now < crawlNextMs) return;
+
+    if (crawlStepsLeft <= 0) {
+        writeCoils(crawlMotor, 0);
+        Serial.println("ink c done");
+        crawlMotor = -1;
+        return;
+    }
+
+    byte pattern = FULLSTEP[crawlPhase & 3];
+    writeCoils(crawlMotor, pattern);
+    Serial.print("ink c phase=");
+    Serial.print(crawlPhase & 3);
+    Serial.print(" bits=");
+    printPatternBits(pattern);
+    Serial.println(" (expect exactly two adjacent LEDs)");
+
+    crawlPhase = (crawlPhase + 1) & 3;
+    crawlStepsLeft--;
+    crawlNextMs = now + CRAWL_DWELL_MS;
+    idleSince[crawlMotor] = now;
 }
 
 // Ramps |rate| toward |targetRate| so cold 28BYJ-48 starts don't stall when
@@ -268,6 +382,9 @@ void applyRamp() {
 }
 
 void stepMotors() {
+    // Crawl/probe own the coil lines; don't let the rate scheduler fight them.
+    if (crawlMotor >= 0 || probeMotor >= 0) return;
+
     unsigned long nowMs = millis();
     unsigned long nowUs = micros();
     const byte *table = stepTable();
@@ -303,6 +420,7 @@ void stepMotors() {
 void loop() {
     handleSerial();
     applyWatchdog();
+    runCrawl();
     applyRamp();
     stepMotors();
 }

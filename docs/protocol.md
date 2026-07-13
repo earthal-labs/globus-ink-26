@@ -12,6 +12,10 @@
 | `D mode` | tsup → ink | select coil map: `nat_full`, `nat_half`, `swap_full`, `swap_half` |
 | `ink d mode` | ink → tsup | ack of `D` / `T` drive mode |
 | `T m mode` | tsup → ink | self-held bench: motor `m` (0–2) at 40 steps/s for 4 s |
+| `C m` | tsup → ink | self-held slow crawl: 500 ms/phase, NATURAL+FULLSTEP, 2 cycles |
+| `ink c …` | ink → tsup | crawl phase/bits lines (`bits=1100` etc.) |
+| `I m j` | tsup → ink | light only motor `m` input `j` (1–4) for 2 s |
+| `ink i …` | ink → tsup | ack of single-IN probe |
 
 tsup queries with `P` rather than relying solely on the boot-time hello:
 native-USB boards (e.g. the Nano R4) drop the whole USB connection on

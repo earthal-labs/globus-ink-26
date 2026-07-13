@@ -23,7 +23,12 @@ DIR = [1, 1, 1]  # per-wheel direction sign - flip via calibration ritual, not b
 # --- Controller (sec. 4) ---
 TICK_HZ = 10
 GAIN_K = 0.5         # 1/s; larger = snappier retargets
-OMEGA_MAX = 0.26      # rad/s; matches the ~450 steps/s wheel cap
+# TEMP: dropped from 0.26 (~450 steps/s) for stall testing - ink.ino commands
+# the wheels straight to whatever rate this yields with no ramp-up, and a
+# 28BYJ-48 can't start from a standstill anywhere near its top speed under
+# real load. Revert or retune once confirmed - see the "chugging" symptom
+# discussion. ~50 steps/s here, a rate a cold stepper should reliably start at.
+OMEGA_MAX = 0.03
 DEADBAND_DEG = 0.05   # TODO: asymmetric wake/sleep thresholds instead of one
 
 # --- Satellite tracking (sec. 7) ---

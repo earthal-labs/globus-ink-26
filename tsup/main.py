@@ -222,6 +222,7 @@ def main(satellite_name=None):
 
             # Command the wheels (sec. 8, 9.1)
             rates = wheel_rates(ω)
+            print(f"θ={degrees(θ):.2f}° ω={ω} rates={rates}")
             link.send_rates(conn, rates)
 
             # Integrate ω_actual, not ω - quantization fix (sec. 5.2).

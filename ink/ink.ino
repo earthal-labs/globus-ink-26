@@ -1,12 +1,10 @@
-#include <stdlib.h> // strtol; being explicit rather than assuming Arduino.h pulls it in
+#include <stdlib.h> // strtol
 #include <string.h> // strcmp
 
 const int PROTOCOL_VERSION = 0;
 
-// Natural order: row position j maps straight to the board's INj+1 (D2->IN1
-// etc.). Production drive is NAT + HALFSTEP — same map as ink/bringup, which
-// is the firmware path that demonstrably rotates these motors. FULLSTEP and
-// the IN1-IN3-IN2-IN4 pin swap remain available as bench modes via D/T.
+// Production = NAT pins + HALFSTEP, matching ink/bringup (the path that
+// demonstrably rotates these motors). FULLSTEP / pin-swap remain bench-only.
 const int PINS_NAT[3][4] = {
     { 2, 3, 4, 5 },
     { 6, 7, 8, 9 },
@@ -18,9 +16,6 @@ const int PINS_SWAP[3][4] = {
     { 10, 12, 11, 13 }
 };
 
-// Half-step is production: matches the freerunning bringup sketch. Full-step
-// remains for LED-crawl (clearer two-coil pairs). STEPS_PER_RAD in
-// tsup/config.py must stay on half-step (4075.78 / rev).
 const byte FULLSTEP[4] = {
     0b1100,
     0b0110,
@@ -38,15 +33,15 @@ const byte HALFSTEP[8] = {
     0b1001
 };
 
-const unsigned long WATCHDOG_MS = 500UL;      // no V/T command in this long -> all rates 0
-const unsigned long COIL_RELEASE_MS = 2000UL; // idle this long -> de-energize that motor
-const unsigned long BENCH_HOLD_MS = 4000UL;   // T command self-hold (no host keepalive)
-const unsigned long CRAWL_DWELL_MS = 500UL;   // per-phase dwell so LED walk is eye-visible
-const unsigned long PROBE_HOLD_MS = 2000UL;   // single-IN LED probe duration
-const int BENCH_RATE = 833;                  // steps/s for T — matches bringup STEP_US=1200
-const int CRAWL_CYCLES = 2;                  // full revolutions of the phase table
-const int RAMP_STEP = 40;                    // steps/s added toward |target| each ramp tick
-const unsigned long RAMP_INTERVAL_MS = 20UL;  // => ~2000 steps/s^2 toward bringup speeds
+const unsigned long WATCHDOG_MS = 500UL;
+const unsigned long COIL_RELEASE_MS = 2000UL;
+const unsigned long BENCH_HOLD_MS = 4000UL;
+const unsigned long CRAWL_DWELL_MS = 500UL;
+const unsigned long PROBE_HOLD_MS = 2000UL;
+const unsigned long BRINGUP_STEP_US = 1200UL; // ink/bringup STEP_US
+const int BENCH_RATE = 833;                  // ~1e6 / BRINGUP_STEP_US
+const int CRAWL_CYCLES = 2;
+const int MAX_STEPS_PER_LOOP = 8;            // catch-up bound (bringup bursts)
 
 enum DriveMode : byte {
     MODE_NAT_FULL = 0,
@@ -57,24 +52,31 @@ enum DriveMode : byte {
 
 DriveMode driveMode = MODE_NAT_HALF;
 
-// int is 32-bit here (Renesas RA4M1), not 16-bit like classic AVR Uno.
-int targetRate[3] = { 0, 0, 0 };             // commanded steps/s (from V / T)
-int rate[3] = { 0, 0, 0 };                   // ramped steps/s actually used to step
+int rate[3] = { 0, 0, 0 };                   // commanded steps/s (no ramp)
 int phase[3] = { 0, 0, 0 };
-unsigned long nextStepTime[3] = { 0, 0, 0 }; // micros() scale, per motor
-unsigned long idleSince[3] = { 0, 0, 0 };    // millis() scale, per motor
-unsigned long lastRampMs[3] = { 0, 0, 0 };
-unsigned long lastCmdTime = 0;               // millis() scale, for the watchdog
-unsigned long benchUntil = 0;                // millis(); T/C/I hold watchdog until then
+unsigned long nextStepTime[3] = { 0, 0, 0 };
+unsigned long idleSince[3] = { 0, 0, 0 };
+bool coilsEnergized[3] = { false, false, false };
+unsigned long lastCmdTime = 0;
+unsigned long benchUntil = 0;
 
-// Slow visual crawl: advances FULLSTEP one phase every CRAWL_DWELL_MS.
+// Slow visual crawl (FULLSTEP, natural pins).
 int crawlMotor = -1;
 int crawlPhase = 0;
 int crawlStepsLeft = 0;
 unsigned long crawlNextMs = 0;
 
-// Single-IN probe: lights exactly one driver input so wiring can be verified.
 int probeMotor = -1;
+
+// In-firmware copy of ink/bringup — bypasses the V rate scheduler entirely.
+int freerunMotor = -1;
+int freerunDir = 1;
+int freerunPhase = 0;
+unsigned long freerunNextUs = 0;
+
+// Heartbeat so the host can prove the V path is actually stepping.
+unsigned long stepCount[3] = { 0, 0, 0 };
+unsigned long lastHbMs = 0;
 
 char lineBuf[48];
 byte lineLen = 0;
@@ -124,68 +126,77 @@ void setup() {
     printHello();
     for (int m = 0; m < 3; m++)
         for (int j = 0; j < 4; j++)
-            pinMode(PINS_NAT[m][j], OUTPUT); // NAT and SWAP use the same 12 pins
+            pinMode(PINS_NAT[m][j], OUTPUT);
+    unsigned long t = micros();
+    for (int m = 0; m < 3; m++)
+        nextStepTime[m] = t;
 }
 
-// Writes a 4-bit coil pattern to a motor's pins (IN1 = MSB under natural
-// mapping). pattern=0 de-energizes.
 void writeCoils(int motor, byte pattern) {
     const int (*pins)[4] = isSwapMode() ? PINS_SWAP : PINS_NAT;
     for (int j = 0; j < 4; j++)
         digitalWrite(pins[motor][j], (pattern >> (3 - j)) & 1);
+    coilsEnergized[motor] = (pattern != 0);
 }
 
-void setTargets(int r0, int r1, int r2) {
-    targetRate[0] = r0;
-    targetRate[1] = r1;
-    targetRate[2] = r2;
-    lastCmdTime = millis();
-    // Seed ramped rates immediately so the first step after idle doesn't wait
-    // a full RAMP_INTERVAL (bringup has no ramp — motion starts at once).
+// Bringup-identical write: always NAT pins + HALFSTEP (ignores D mode).
+void writeBringupStep(int motor, int ph) {
+    for (int j = 0; j < 4; j++)
+        digitalWrite(PINS_NAT[motor][j], (HALFSTEP[ph & 7] >> (3 - j)) & 1);
+    coilsEnergized[motor] = true;
+}
+
+void releaseMotor(int motor) {
+    for (int j = 0; j < 4; j++)
+        digitalWrite(PINS_NAT[motor][j], LOW);
+    coilsEnergized[motor] = false;
+}
+
+void setRates(int r0, int r1, int r2) {
+    int next[3] = { r0, r1, r2 };
+    unsigned long nowUs = micros();
     for (int m = 0; m < 3; m++) {
-        int t = targetRate[m];
-        if (t == 0) {
-            rate[m] = 0;
-            continue;
-        }
-        if (rate[m] == 0 || ((rate[m] > 0) != (t > 0))) {
-            int seed = abs(t);
-            if (seed > RAMP_STEP) seed = RAMP_STEP;
-            rate[m] = (t > 0 ? 1 : -1) * seed;
-            lastRampMs[m] = millis();
-        }
+        // Rising edge from idle: arm the schedule like bringup's setup().
+        if (rate[m] == 0 && next[m] != 0)
+            nextStepTime[m] = nowUs;
+        rate[m] = next[m];
+        if (next[m] == 0)
+            phase[m] &= phaseMask();
     }
+    lastCmdTime = millis();
 }
 
-void zeroTargets() {
-    setTargets(0, 0, 0);
+void zeroRates() {
     rate[0] = rate[1] = rate[2] = 0;
 }
 
 void stopBenchEffects() {
-    if (crawlMotor >= 0) writeCoils(crawlMotor, 0);
-    if (probeMotor >= 0) writeCoils(probeMotor, 0);
-    crawlMotor = -1;
-    crawlStepsLeft = 0;
-    probeMotor = -1;
+    if (crawlMotor >= 0) {
+        releaseMotor(crawlMotor);
+        crawlMotor = -1;
+        crawlStepsLeft = 0;
+    }
+    if (probeMotor >= 0) {
+        releaseMotor(probeMotor);
+        probeMotor = -1;
+    }
+    if (freerunMotor >= 0) {
+        releaseMotor(freerunMotor);
+        freerunMotor = -1;
+    }
 }
 
 void printPatternBits(byte pattern) {
-    // IN1..IN4 as 1/0 so the host can confirm the eye-visible LED pair.
     for (int j = 0; j < 4; j++)
         Serial.print((pattern >> (3 - j)) & 1);
 }
 
-// Parses "V s1 s2 s3", "P", "D mode", "T m mode", "C m", "I m j".
-// Malformed lines are rejected whole so corruption can't quietly defeat
-// the watchdog.
 void parseAndApply(char *buf) {
     if (buf[0] == 'P' && buf[1] == '\0') {
         printHello();
         return;
     }
 
-    // "D mode" — select coil map for all subsequent stepping (bench + prod).
     if (buf[0] == 'D' && buf[1] == ' ') {
         DriveMode mode;
         if (!parseDriveMode(buf + 2, &mode)) return;
@@ -197,18 +208,38 @@ void parseAndApply(char *buf) {
         return;
     }
 
-    // "C m" — slow full-step crawl so the LED pair walk is visible by eye.
-    // Uses NATURAL pins + FULLSTEP only (production map). Self-held.
+    // "B m" — in-firmware ink/bringup clone (NAT+HALFSTEP @ 1200 µs, 4 s).
+    if (buf[0] == 'B' && buf[1] == ' ') {
+        char *endptr;
+        long motor = strtol(buf + 2, &endptr, 10);
+        if (endptr == buf + 2 || *endptr != '\0') return;
+        if (motor < 0 || motor > 2) return;
+        stopBenchEffects();
+        zeroRates();
+        for (int m = 0; m < 3; m++)
+            releaseMotor(m);
+        freerunMotor = (int)motor;
+        freerunDir = 1;
+        freerunPhase = 0;
+        freerunNextUs = micros();
+        benchUntil = millis() + BENCH_HOLD_MS;
+        lastCmdTime = millis();
+        Serial.print("ink b m=");
+        Serial.print(freerunMotor);
+        Serial.println(" bringup-clone 4s");
+        return;
+    }
+
     if (buf[0] == 'C' && buf[1] == ' ') {
         char *endptr;
         long motor = strtol(buf + 2, &endptr, 10);
         if (endptr == buf + 2 || *endptr != '\0') return;
         if (motor < 0 || motor > 2) return;
         stopBenchEffects();
-        zeroTargets();
+        zeroRates();
         driveMode = MODE_NAT_FULL;
         for (int m = 0; m < 3; m++)
-            writeCoils(m, 0);
+            releaseMotor(m);
         crawlMotor = (int)motor;
         crawlPhase = 0;
         crawlStepsLeft = 4 * CRAWL_CYCLES;
@@ -220,8 +251,6 @@ void parseAndApply(char *buf) {
         return;
     }
 
-    // "I m j" — light only motor m's INj (j=1..4) for PROBE_HOLD_MS.
-    // Exactly one ULN LED must turn on; any other result = wiring fault.
     if (buf[0] == 'I' && buf[1] == ' ') {
         char *endptr;
         long motor = strtol(buf + 2, &endptr, 10);
@@ -232,12 +261,12 @@ void parseAndApply(char *buf) {
         if (endptr == injStart || *endptr != '\0') return;
         if (inj < 1 || inj > 4) return;
         stopBenchEffects();
-        zeroTargets();
+        zeroRates();
         driveMode = MODE_NAT_FULL;
         for (int m = 0; m < 3; m++)
-            writeCoils(m, 0);
+            releaseMotor(m);
         probeMotor = (int)motor;
-        byte pattern = (byte)(1 << (4 - inj)); // IN1=0b1000 .. IN4=0b0001
+        byte pattern = (byte)(1 << (4 - inj));
         writeCoils(probeMotor, pattern);
         benchUntil = millis() + PROBE_HOLD_MS;
         lastCmdTime = millis();
@@ -251,7 +280,6 @@ void parseAndApply(char *buf) {
         return;
     }
 
-    // "T m mode" — self-held single-motor bench spin (no host keepalive).
     if (buf[0] == 'T' && buf[1] == ' ') {
         char *endptr;
         long motor = strtol(buf + 2, &endptr, 10);
@@ -261,14 +289,9 @@ void parseAndApply(char *buf) {
         if (!parseDriveMode(endptr + 1, &mode)) return;
         stopBenchEffects();
         driveMode = mode;
-        phase[motor] &= phaseMask();
         int rates[3] = { 0, 0, 0 };
         rates[motor] = BENCH_RATE;
-        setTargets(rates[0], rates[1], rates[2]);
-        // Start the ramp near the bench rate so the LED walk is immediate,
-        // but still allow ramp logic to kick in if target is later raised.
-        rate[0] = rate[1] = rate[2] = 0;
-        rate[motor] = BENCH_RATE;
+        setRates(rates[0], rates[1], rates[2]);
         benchUntil = millis() + BENCH_HOLD_MS;
         printDriveMode();
         Serial.print("ink t m=");
@@ -285,7 +308,7 @@ void parseAndApply(char *buf) {
     for (int i = 0; i < 3; i++) {
         char *endptr;
         values[i] = strtol(p, &endptr, 10);
-        if (endptr == p) return; // no digits at all
+        if (endptr == p) return;
         if (i < 2) {
             if (*endptr != ' ') return;
             p = endptr + 1;
@@ -295,40 +318,36 @@ void parseAndApply(char *buf) {
     }
 
     stopBenchEffects();
-    setTargets((int)values[0], (int)values[1], (int)values[2]);
-    benchUntil = 0; // host-driven V takes over from any self-held bench
+    setRates((int)values[0], (int)values[1], (int)values[2]);
+    benchUntil = 0;
 }
 
-// Non-blocking, byte at a time - Serial.readStringUntil() blocks up to 1s
-// with no newline and drops partial lines on timeout, which would freeze
-// step timing and can corrupt commands under real jitter.
 void handleSerial() {
     while (Serial.available()) {
         char c = Serial.read();
         if (c == '\n') {
             if (!lineOverflowed) {
-                lineBuf[lineLen] = '\0'; // strtol needs a real C string
+                lineBuf[lineLen] = '\0';
                 parseAndApply(lineBuf);
             }
             lineLen = 0;
             lineOverflowed = false;
+        } else if (c == '\r') {
+            // ignore CR so "V 833 0 0\r\n" still parses
         } else if (lineLen < sizeof(lineBuf) - 1) {
             lineBuf[lineLen++] = c;
         } else {
-            lineOverflowed = true; // drop the rest, resync at the next '\n'
+            lineOverflowed = true;
         }
     }
 }
 
 void applyWatchdog() {
-    if (millis() < benchUntil) return; // T/C/I self-hold still active
+    if (millis() < benchUntil) return;
     if (millis() - lastCmdTime > WATCHDOG_MS) {
-        if (probeMotor >= 0) {
-            writeCoils(probeMotor, 0);
-            probeMotor = -1;
-        }
         stopBenchEffects();
-        zeroTargets();
+        zeroRates();
+        // do NOT refresh lastCmdTime here — that used to re-arm the dog
     }
 }
 
@@ -338,7 +357,7 @@ void runCrawl() {
     if (now < crawlNextMs) return;
 
     if (crawlStepsLeft <= 0) {
-        writeCoils(crawlMotor, 0);
+        releaseMotor(crawlMotor);
         Serial.println("ink c done");
         crawlMotor = -1;
         return;
@@ -350,7 +369,7 @@ void runCrawl() {
     Serial.print(crawlPhase & 3);
     Serial.print(" bits=");
     printPatternBits(pattern);
-    Serial.println(" (expect exactly two adjacent LEDs)");
+    Serial.println();
 
     crawlPhase = (crawlPhase + 1) & 3;
     crawlStepsLeft--;
@@ -358,45 +377,30 @@ void runCrawl() {
     idleSince[crawlMotor] = now;
 }
 
-// Ramps |rate| toward |targetRate| so cold 28BYJ-48 starts don't stall when
-// tsup jumps straight to a high command (no AccelStepper — same idea in-line).
-void applyRamp() {
-    unsigned long now = millis();
-    for (int m = 0; m < 3; m++) {
-        int target = targetRate[m];
-        if (target == 0) {
-            rate[m] = 0;
-            lastRampMs[m] = now;
-            continue;
-        }
-        // Sign flip: snap through zero and ramp up in the new direction.
-        if (rate[m] != 0 && ((rate[m] > 0) != (target > 0))) {
-            rate[m] = 0;
-            lastRampMs[m] = now;
-            continue;
-        }
-        if (now - lastRampMs[m] < RAMP_INTERVAL_MS) continue;
-        lastRampMs[m] = now;
+// Exact ink/bringup scheduler, hosted inside production firmware.
+void runFreerun() {
+    if (freerunMotor < 0) return;
+    if (millis() >= benchUntil) {
+        releaseMotor(freerunMotor);
+        Serial.println("ink b done");
+        freerunMotor = -1;
+        return;
+    }
 
-        int absTarget = abs(target);
-        int absRate = abs(rate[m]);
-        int sign = target > 0 ? 1 : -1;
-        if (absRate < absTarget) {
-            absRate += RAMP_STEP;
-            if (absRate > absTarget) absRate = absTarget;
-            // Don't crawl at 1 step/s under load — start usefully.
-            if (absRate < RAMP_STEP) absRate = RAMP_STEP;
-            if (absRate > absTarget) absRate = absTarget;
-        } else if (absRate > absTarget) {
-            absRate = absTarget;
-        }
-        rate[m] = sign * absRate;
+    unsigned long now = micros();
+    // Burst catch-up like bringup (soft-stall bound per loop).
+    int guard = 0;
+    while (now >= freerunNextUs && guard++ < MAX_STEPS_PER_LOOP) {
+        freerunPhase = (freerunPhase + freerunDir) & 7;
+        writeBringupStep(freerunMotor, freerunPhase);
+        freerunNextUs += BRINGUP_STEP_US;
+        stepCount[freerunMotor]++;
+        idleSince[freerunMotor] = millis();
     }
 }
 
 void stepMotors() {
-    // Crawl/probe own the coil lines; don't let the rate scheduler fight them.
-    if (crawlMotor >= 0 || probeMotor >= 0) return;
+    if (crawlMotor >= 0 || probeMotor >= 0 || freerunMotor >= 0) return;
 
     unsigned long nowMs = millis();
     unsigned long nowUs = micros();
@@ -405,35 +409,56 @@ void stepMotors() {
 
     for (int m = 0; m < 3; m++) {
         if (rate[m] == 0) {
-            if (nowMs - idleSince[m] > COIL_RELEASE_MS) writeCoils(m, 0);
+            if (coilsEnergized[m] && (nowMs - idleSince[m] > COIL_RELEASE_MS))
+                releaseMotor(m);
             continue;
         }
 
-        idleSince[m] = nowMs; // refreshed each active tick; freezes at the
-                               // last active moment once rate hits 0
-
+        idleSince[m] = nowMs;
         unsigned long interval = 1000000UL / (unsigned long)abs(rate[m]);
+        if (interval == 0) interval = 1;
 
-        // Resuming from idle leaves the schedule stale; without this the
-        // step below would burst-fire to "catch up," which the motor
-        // can't physically do and which tsup's dead reckoning never sees
-        // (real uncommanded steps => drift, sec. 5.2's failure mode).
-        if (nowUs - nextStepTime[m] > interval) {
-            nextStepTime[m] = nowUs;
-        }
-
-        if (nowUs >= nextStepTime[m]) {
+        // Bringup-style: when due, take up to MAX_STEPS_PER_LOOP; NEVER snap
+        // nextStepTime forward to "now" (that discarded owed steps and is the
+        // largest behavioural gap vs the working bringup sketch).
+        int guard = 0;
+        while (nowUs >= nextStepTime[m] && guard++ < MAX_STEPS_PER_LOOP) {
             phase[m] = (phase[m] + (rate[m] > 0 ? 1 : -1)) & mask;
             writeCoils(m, table[phase[m]]);
-            nextStepTime[m] += interval; // += , not = : no drift
+            nextStepTime[m] += interval;
+            stepCount[m]++;
         }
     }
+}
+
+void heartbeat() {
+    unsigned long now = millis();
+    if (now - lastHbMs < 1000UL) return;
+    lastHbMs = now;
+    // Only speak when something is actively commanded — proves V path
+    // without flooding USB when idle.
+    if (rate[0] == 0 && rate[1] == 0 && rate[2] == 0 && freerunMotor < 0)
+        return;
+    Serial.print("ink hb rate=");
+    Serial.print(rate[0]);
+    Serial.print(' ');
+    Serial.print(rate[1]);
+    Serial.print(' ');
+    Serial.print(rate[2]);
+    Serial.print(" steps/s≈");
+    Serial.print(stepCount[0]);
+    Serial.print(' ');
+    Serial.print(stepCount[1]);
+    Serial.print(' ');
+    Serial.println(stepCount[2]);
+    stepCount[0] = stepCount[1] = stepCount[2] = 0;
 }
 
 void loop() {
     handleSerial();
     applyWatchdog();
     runCrawl();
-    applyRamp();
+    runFreerun();
     stepMotors();
+    heartbeat();
 }

@@ -10,8 +10,10 @@ freerunning bringup sketch uses — if the shaft turns there, production
 commanding works.
 
 Also:
-  --crawl  slow LED-pair walk (500 ms/phase) so POV can't hide the sequence
-  --probe  lights each IN1..IN4 alone — exactly one LED must turn on
+  --crawl         slow LED-pair walk (500 ms/phase)
+  --probe         lights each IN1..IN4 alone
+  --match-bringup V path at nat_half @ 833 (fwd+rev)
+  --freerun-b     production-firmware bringup clone via `B m` (no V scheduler)
 
 Distributed under the GPL-3.0-or-later License. See LICENSE for details.
 """
@@ -21,8 +23,7 @@ import time
 
 import link
 
-# Bringup uses STEP_US=1200 → ~833 half-steps/s. Earlier benches at 40 steps/s
-# sequenced LEDs (POV looked solid) but only ~14° of shaft in 4 s — easy to miss.
+# Bringup uses STEP_US=1200 → ~833 half-steps/s.
 RATE = 833
 HOLD_SECONDS = 4
 PAUSE_BETWEEN_SECONDS = 1.0
@@ -89,6 +90,20 @@ def run_match_bringup(conn, motors, hold_seconds):
         time.sleep(PAUSE_BETWEEN_SECONDS)
 
 
+def run_freerun_b(conn, motors):
+    """B m — bringup clone inside production firmware (bypasses V scheduler)."""
+    for motor in motors:
+        print(f"\n=== B {motor}: in-firmware bringup clone @ 1200 µs/step for 4s ===")
+        print("If THIS spins but --match-bringup does not, the V scheduler is the bug.")
+        print("If THIS also fails, production firmware init/USB differs from ink/bringup.")
+        conn.write(f"B {motor}\n".encode())
+        start = time.monotonic()
+        while time.monotonic() - start < HOLD_SECONDS + 1.0:
+            drain(conn)
+            time.sleep(0.05)
+        time.sleep(PAUSE_BETWEEN_SECONDS)
+
+
 def run_crawl(conn, motors):
     """500 ms/phase full-step crawl — LEDs must show exactly two adjacent on."""
     for motor in motors:
@@ -145,6 +160,11 @@ def main():
         help="Smoke-test V path at bringup rate (nat_half @ 833, fwd+rev)",
     )
     parser.add_argument(
+        "--freerun-b",
+        action="store_true",
+        help="In-firmware bringup clone via B command (skips V scheduler)",
+    )
+    parser.add_argument(
         "--crawl",
         action="store_true",
         help="Slow full-step LED crawl only (skips mode matrix)",
@@ -169,6 +189,8 @@ def main():
             run_probe(conn, args.motors)
         elif args.crawl:
             run_crawl(conn, args.motors)
+        elif args.freerun_b:
+            run_freerun_b(conn, args.motors)
         elif args.match_bringup:
             run_match_bringup(conn, args.motors, args.hold)
         else:

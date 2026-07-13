@@ -14,6 +14,9 @@
 | `T m mode` | tsup → ink | self-held bench: motor `m` (0–2) at 833 steps/s for 4 s |
 | `C m` | tsup → ink | self-held slow crawl: 500 ms/phase, NATURAL+FULLSTEP, 2 cycles |
 | `ink c …` | ink → tsup | crawl phase/bits lines (`bits=1100` etc.) |
+| `B m` | tsup → ink | in-firmware bringup clone: NAT+HALFSTEP @ 1200 µs for 4 s |
+| `ink b …` / `ink b done` | ink → tsup | freerun-B start/end |
+| `ink hb …` | ink → tsup | 1 Hz heartbeat while stepping (`rate=` + steps this second) |
 | `I m j` | tsup → ink | light only motor `m` input `j` (1–4) for 2 s |
 | `ink i …` | ink → tsup | ack of single-IN probe |
 
@@ -26,8 +29,10 @@ to catch a broadcast tied to reset timing it may not even have caused.
 `D` / `T` / `C` / `I` are additive bench messages: production `tsup` never
 sends them; old firmware that only accepts `P`/`V` ignores them. Default
 drive mode is `nat_half` (natural IN1–IN4, half-step — same as
-`ink/bringup`). Use `tsup/force_spin.py --match-bringup` to confirm the
-`V`-command path turns the shaft at the proven bringup rate.
+`ink/bringup`). Diagnosis helpers:
+`force_spin.py --freerun-b` (bringup clone inside production firmware) and
+`--match-bringup` (V path at 833 half-steps/s). Watch for `ink hb` lines
+proving the V path is actually counting steps.
 
 ## Rules
 

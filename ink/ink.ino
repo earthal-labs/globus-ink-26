@@ -156,14 +156,22 @@ void setRates(int r0, int r1, int r2) {
     int next[3] = { r0, r1, r2 };
     unsigned long nowUs = micros();
     for (int m = 0; m < 3; m++) {
-        // Rising edge from idle: arm the schedule like bringup's setup().
-        if (rate[m] == 0 && next[m] != 0)
+        if (next[m] != 0) {
+            // Rising edge or re-command: arm like bringup's setup().
+            if (rate[m] == 0)
+                nextStepTime[m] = nowUs;
+        } else {
+            // Idle: keep schedule fresh so a later command can't burst-catch
+            // a multi-second debt (caused bogus first-second hb cross-talk).
             nextStepTime[m] = nowUs;
+        }
         rate[m] = next[m];
         if (next[m] == 0)
             phase[m] &= phaseMask();
+        stepCount[m] = 0;
     }
     lastCmdTime = millis();
+    lastHbMs = millis(); // align heartbeat window to the new command
 }
 
 void zeroRates() {
@@ -409,6 +417,7 @@ void stepMotors() {
 
     for (int m = 0; m < 3; m++) {
         if (rate[m] == 0) {
+            nextStepTime[m] = nowUs; // park the schedule while idle
             if (coilsEnergized[m] && (nowMs - idleSince[m] > COIL_RELEASE_MS))
                 releaseMotor(m);
             continue;

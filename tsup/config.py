@@ -24,37 +24,28 @@ DIR = [1, 1, 1]  # per-wheel direction sign - flip via calibration ritual, not b
 
 # --- Controller (sec. 4) ---
 TICK_HZ = 10
-# With θ only ~1–2° (nearly aligned), ω = GAIN_K·θ stays tiny unless GAIN is
-# assertive. Brought up for visible slews now that half-step @ ~833 is proven.
-GAIN_K = 2.0         # 1/s; larger = snappier retargets
-# Globe |ω| cap (rad/s). 0.20 → roughly hundreds of half-steps/s (under the
-# bringup-proven 833). Raise toward 0.26 if slews feel slow; drop if cold
-# starts under load chug again.
-OMEGA_MAX = 0.20
-# Asymmetric deadband (wake/sleep). Sleep when closer than SLEEP; only resume
-# once error exceeds WAKE.
+GAIN_K = 2.0     # 1/s; larger = snappier retargets
+OMEGA_MAX = 0.20  # rad/s globe cap; keeps peak rates under the proven 833 sps
+# Asymmetric deadband: sleep under SLEEP, only resume past WAKE.
 DEADBAND_SLEEP_DEG = 0.20
 DEADBAND_WAKE_DEG = 0.60
-# Friction-drive overdrive (adaptive), bench-tuned on the steel globe.
-# Interpolate by peak |kinematic| rate: tiny → SMALL, large slew → LARGE.
-# Empirically: near-1× on small nudges, ~10× once kin rates are already big
-# (inertia / breaking the sphere free under load).
-RATE_OVERDRIVE_SMALL = 1.0   # when kin rates are tiny
-RATE_OVERDRIVE_LARGE = 10.0  # when kin |rate| peak reaches RATE_SLEW_REF
-RATE_SLEW_REF = 250          # kin |rate| peak at which scale reaches LARGE
-RATE_CAP = 833               # half-steps/s — bringup-proven ceiling
-# MANUAL must stay near 1×: dead-reckoning integrates unscaled rates, so a
-# 10× ink boost makes the physical globe spin ~10× past what STATE/vzor show
-# (small pans look like many revolutions). AUTO can keep the big adaptive
-# boost for loaded ISS catch-up; MANUAL pan/goto caps here.
-MANUAL_OVERDRIVE_CAP = 1.0
-# Per-wheel signed rate slew (AUTO + MANUAL). Gearboxes / stiction need a beat
-# when reversing: decelerate through 0, brief settle, then soft accel so ink
-# is not slammed to the opposite sign. ~80 sps² → ~2–3 s to reach a ~200 sps
-# cruise after reverse — matches bench feel at 1×.
-RATE_ACCEL_SPS2 = 200.0          # same-sign approach (steps/s²)
+
+# --- Friction-drive overdrive (docs/calibration-bench.md) ---
+# Adaptive ink boost by peak kin |rate|: ~1x on nudges, up to LARGE on big
+# slews (breaking the steel sphere free under load). DR always integrates
+# the UNSCALED rates, so overdrive != 1x desyncs q from the ball - see doc.
+RATE_OVERDRIVE_SMALL = 1.0   # scale when kin rates are tiny
+RATE_OVERDRIVE_LARGE = 10.0  # scale once peak reaches RATE_SLEW_REF
+RATE_SLEW_REF = 250          # kin |rate| peak (sps) at which scale = LARGE
+RATE_CAP = 833               # half-steps/s - bringup-proven ceiling
+MANUAL_OVERDRIVE_CAP = 1.0   # MANUAL stays ~1x so vzor STATE stays faithful
+
+# --- Rate slew (reverse take-up; docs/calibration-bench.md) ---
+# Decelerate through 0, settle, then soft climb-out - never slam a gearbox
+# straight to the opposite sign.
+RATE_ACCEL_SPS2 = 200.0          # same-sign approach (steps/s^2)
 RATE_REVERSE_ACCEL_SPS2 = 80.0   # climb-out after stop/reverse
-REVERSE_SETTLE_S = 0.35          # hold at 0 when crossing directions
+REVERSE_SETTLE_S = 0.35          # dwell at 0 when crossing directions
 
 # --- Satellite tracking (sec. 7) ---
 SATELLITES = {"ISS": 25544}  # name -> NORAD catalog id; add more here
@@ -69,10 +60,8 @@ SERIAL_BOOT_WAIT_S = 2        # ink resets when the port opens; wait for it befo
 # --- vzor bridge (docs/bridge-protocol.md) ---
 BRIDGE_HOST = "127.0.0.1"  # loopback only - this drives real motors, never LAN-reachable
 BRIDGE_PORT = 8765
-PAN_WATCHDOG_MS = 300       # no PAN in this long -> treat rate as 0 (silence means stop)
-# Soften vzor's wired PAN deg/s without rebuilding Rust (1.0 = use as-sent).
-# Vzor ships PAN_DEGREES_PER_SECOND=10; raise/lower here for feel on the Pi.
-PAN_RATE_SCALE = 1.0
+PAN_WATCHDOG_MS = 300  # no PAN in this long -> treat rate as 0 (silence means stop)
+PAN_RATE_SCALE = 1.0   # scales vzor's PAN deg/s (ships 10) without rebuilding Rust
 
 # --- Persisted state (sec. 5.3) ---
 # On a Pi running the overlay filesystem (root is RAM-backed, changes don't

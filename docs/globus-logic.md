@@ -370,9 +370,6 @@ STEPS_PER_RAD = 4075.78 / 2π ≈ 648.6
 rate_i (steps/s) = Ω_i · STEPS_PER_RAD        signed; sign = direction
 ```
 
-(Bench crawl still uses full-step patterns so the ULN LED pair walk is easy
-to see by eye. Production `V` commands use half-step.)
-
 Worked example so you know what "normal" looks like: the ISS ground track
 moves at |ω| ≈ 1.2 mrad/s. Wheel rim speeds ≈ R·1.2 mrad/s → Ω ≈ 3.2 mrad/s
 → **≈ 4 half-steps/second per motor** while tracking. Slews run toward the
@@ -523,14 +520,12 @@ than folded into this pseudocode.
 
 ```
 constants:
-    FULLSTEP[4] = { 1100, 0110, 0011, 1001 }          # LED crawl patterns
-    HALFSTEP[8] = { ... }                             # production drive
-    pins_nat[3][4], pins_swap[3][4]                   # natural vs Stepper.h order
-    RAMP_STEP / RAMP_INTERVAL_MS                      # cold-start accel
+    HALFSTEP[8] = { 1000, 1100, 0100, 0110,           # coil patterns
+                    0010, 0011, 0001, 1001 }           # IN1..IN4 per motor
+    pins[3][4] = { D2-D5, D6-D9, D10-D13 }             # natural IN order
 
-state per motor: target_rate, rate (ramped steps/s, signed), phase,
+state per motor: rate (steps/s, signed), phase (0..7),
                  next_step_time (µs), idle_since
-drive_mode: nat_half (default/production) | nat_full | swap_full | swap_half
 
 setup:
     pins to OUTPUT, Serial.begin(115200)
@@ -538,33 +533,34 @@ setup:
 
 loop:                                                 # no delay() anywhere
     if serial line available:
-        parse "V s1 s2 s3" -> target rates, last_cmd_time
-        parse "D mode" / "T m mode"                   # bench only; see protocol.md
+        parse "V s1 s2 s3" -> rates, last_cmd_time    # "P" -> reprint hello
         (on parse failure: ignore line)
 
-    if now − last_cmd_time > 500 ms (and no T hold):  # watchdog
+    if now − last_cmd_time > 500 ms:                  # watchdog
         all rates = 0
-
-    ramp |rate| toward |target_rate| (~250 steps/s²)
 
     for each motor m:
         if rate[m] == 0:
-            if idle > 2 s: write coils 0000            # release
+            park schedule; if idle > 2 s: write coils 0000   # release
             continue
         interval = 1e6 / |rate[m]|                     # µs per step
-        if now ≥ next_step_time[m]:
-            phase[m] += sign(rate[m])  (mod 4 or 8)
-            write table[phase[m]] to pins for drive_mode
+        while now ≥ next_step_time[m] (≤ 8 per pass):  # take owed steps
+            phase[m] += sign(rate[m])  (mod 8)
+            write HALFSTEP[phase[m]] to pins[m]
             next_step_time[m] += interval              # += not =, no drift
+
+    heartbeat 1 Hz while stepping ("ink hb ...")
 ```
 
 The `+=` in the last line matters: setting `next = now + interval` accumulates
-scheduling jitter into position error; `next += interval` makes the long-run
-average rate exact — the firmware-level cousin of Section 5.2.
+scheduling jitter into position error; `+=` (with a bounded catch-up burst)
+makes the long-run average rate exact — the firmware-level cousin of
+Section 5.2. Rate ramping/reversal softening lives in tsup
+(`slew_wheel_rates`), not the firmware.
 
-Bench sequence isolation (hum / no rotation): `cd tsup && uv run python force_spin.py`
-tries each drive mode on each motor. A/B freerunning hardware path without the
-`V` parser: flash `ink/bringup` (see that sketch's header comments).
+Hardware smoke tests: `cd tsup && uv run python force_spin.py` (V path,
+each motor fwd/rev), or flash `ink/bringup` to A/B the raw coil path with
+no serial protocol at all.
 
 ---
 

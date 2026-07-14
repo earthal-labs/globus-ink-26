@@ -8,17 +8,8 @@
 |---|---|---|
 | `ink p0` | ink → tsup | hello on boot, and in response to `P` |
 | `P` | tsup → ink | query protocol version |
-| `V s1 s2 s3` | tsup → ink | wheel speeds, steps/sec, signed |
-| `D mode` | tsup → ink | select coil map: `nat_full`, `nat_half`, `swap_full`, `swap_half` |
-| `ink d mode` | ink → tsup | ack of `D` / `T` drive mode |
-| `T m mode` | tsup → ink | self-held bench: motor `m` (0–2) at 833 steps/s for 4 s |
-| `C m` | tsup → ink | self-held slow crawl: 500 ms/phase, NATURAL+FULLSTEP, 2 cycles |
-| `ink c …` | ink → tsup | crawl phase/bits lines (`bits=1100` etc.) |
-| `B m` | tsup → ink | in-firmware bringup clone: NAT+HALFSTEP @ 1200 µs for 4 s |
-| `ink b …` / `ink b done` | ink → tsup | freerun-B start/end |
+| `V s1 s2 s3` | tsup → ink | wheel speeds, half-steps/sec, signed |
 | `ink hb …` | ink → tsup | 1 Hz heartbeat while stepping (`rate=` + steps this second) |
-| `I m j` | tsup → ink | light only motor `m` input `j` (1–4) for 2 s |
-| `ink i …` | ink → tsup | ack of single-IN probe |
 
 tsup queries with `P` rather than relying solely on the boot-time hello:
 native-USB boards (e.g. the Nano R4) drop the whole USB connection on
@@ -26,13 +17,11 @@ reset - unlike classic AVR boards with a separate bridge chip that stays
 connected through one - so a freshly-opened connection has no reliable way
 to catch a broadcast tied to reset timing it may not even have caused.
 
-`D` / `T` / `C` / `I` are additive bench messages: production `tsup` never
-sends them; old firmware that only accepts `P`/`V` ignores them. Default
-drive mode is `nat_half` (natural IN1–IN4, half-step — same as
-`ink/bringup`). Diagnosis helpers:
-`force_spin.py --freerun-b` (bringup clone inside production firmware) and
-`--match-bringup` (V path at 833 half-steps/s). Watch for `ink hb` lines
-proving the V path is actually counting steps.
+The drive is natural pin order (D2→IN1 …) + half-step, matching the
+`ink/bringup` sketch that proved this hardware. A set of bench-only
+messages (`D`/`T`/`C`/`B`/`I`) existed briefly during motor bring-up and
+was removed once the drive path was proven; production tsup never sent
+them.
 
 ## Rules
 

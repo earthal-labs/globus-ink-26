@@ -40,9 +40,18 @@ Full-revolution timing → **scale**. Separate reverse trials → **warmup**.
 5. Prefer **open-loop constant ω → `V` rates** (kinematics only). Do **not**
    use vzor GOTO/PAN or AUTO tracking for scale measurement.
 
-If you don’t have a dedicated calibrate script yet: use `force_spin.py` /
-raw `V` from a known `wheel_rates(ω)` printout, or a short one-off snippet
-that holds constant rates. Goal: fixed signed steps/s for the whole lap.
+The dedicated script is `tsup/calibrate_spin.py` — it drives each axis at
+constant kinematic ω (1×, bypassing overdrive/slew/controller entirely),
+times laps and reversals against your Enter key, appends
+`tsup/data/calibration.csv`, and prints median \(k\) per axis plus
+suggested config values:
+
+```bash
+cd ~/globus/tsup
+uv run python calibrate_spin.py                 # Protocol A, all axes ± @ 0.05
+uv run python calibrate_spin.py --reverse       # Protocol B on the same axes
+uv run python calibrate_spin.py --axes Z --omega 0.03 --trials 3
+```
 
 ---
 
@@ -189,6 +198,6 @@ Then:
 - [ ] Confirm lap + restore AUTO overdrive if desired
 - [ ] Re-align globe / `q0` before tracking
 
-Future nice-to-have: `tsup/calibrate_spin.py` that drives each axis, prints
-expected `T`, prompts Enter on mark return / first reverse motion, and writes
-`calibration.csv` plus suggested \(k\) / settle values.
+`tsup/calibrate_spin.py` implements exactly this: per-axis constant-ω
+drive, expected-`T` printout, Enter-prompt timing for both protocols, and
+`calibration.csv` output with suggested \(k\) / settle values.

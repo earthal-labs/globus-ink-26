@@ -171,8 +171,8 @@ def compute_omega(axis, θ, driving):
     Returns (ω, driving_next). Sleep when θ drops below DEADBAND_SLEEP;
     only resume once θ exceeds DEADBAND_WAKE. A former OMEGA_MIN floor caused
     bang-bang axis flips at small θ (kin rates reversing every tick) — that
-    looked like the motors locking against each other. Stiction is handled by
-    RATE_OVERDRIVE on the serial path instead.
+    looked like the motors locking against each other. Stiction / inertia is
+    handled by adaptive RATE_OVERDRIVE_* on the serial path instead.
     """
     if driving:
         if θ < DEADBAND_SLEEP:
@@ -204,7 +204,7 @@ def main(satellite_name=None, inject_error_deg=0.0, realign=False):
         q = inject_orientation_error(q, inject_error_deg)
         print(
             f"Injected {inject_error_deg:.0f}° software error — expect a visible "
-            f"slew (adaptive overdrive: small nudges boosted, big slews ~1.5×)."
+            f"slew (adaptive overdrive: ~1× tiny rates, up to ~10× on big slews)."
         )
         save_state(q)
 

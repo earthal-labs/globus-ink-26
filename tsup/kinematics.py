@@ -44,10 +44,14 @@ def actual_omega(rates):
     return M_inv @ v
 
 def overdrive_scale(rates):
-    """Bigger boost for tiny rates (stiction); ~1.5× once the slew is large."""
+    """Adaptive ink scale from peak kinematic |rate| (bench-tuned on globe).
+
+    Tiny rates → RATE_OVERDRIVE_SMALL (1×); large slews → RATE_OVERDRIVE_LARGE
+    (10×). Linear in between up to RATE_SLEW_REF.
+    """
     peak = max((abs(int(x)) for x in rates), default=0)
     if peak <= 0:
-        return RATE_OVERDRIVE_LARGE
+        return RATE_OVERDRIVE_SMALL
     t = min(peak / float(RATE_SLEW_REF), 1.0)
     return RATE_OVERDRIVE_SMALL + (RATE_OVERDRIVE_LARGE - RATE_OVERDRIVE_SMALL) * t
 

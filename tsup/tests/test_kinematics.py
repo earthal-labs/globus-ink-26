@@ -69,13 +69,17 @@ class TestOverdriveRates(unittest.TestCase):
     def test_zeros_stay_zero(self):
         assert_allclose(overdrive_rates([0, 0, 0], scale=3), [0, 0, 0])
 
-    def test_adaptive_boosts_tiny_rates_more_than_large(self):
+    def test_adaptive_ramps_up_with_larger_rates(self):
         from kinematics import overdrive_scale
-        small = overdrive_scale([20, -10, 0])
-        large = overdrive_scale([250, -100, 50])
-        self.assertGreater(small, large)
-        self.assertAlmostEqual(large, 1.5, places=3)
+        from config import RATE_OVERDRIVE_SMALL, RATE_OVERDRIVE_LARGE
 
+        zero = overdrive_scale([0, 0, 0])
+        tiny = overdrive_scale([20, -10, 0])
+        huge = overdrive_scale([250, -100, 50])
+        self.assertAlmostEqual(zero, RATE_OVERDRIVE_SMALL)
+        self.assertLess(tiny, huge)
+        self.assertGreater(tiny, RATE_OVERDRIVE_SMALL)
+        self.assertAlmostEqual(huge, RATE_OVERDRIVE_LARGE, places=3)
 
 class TestQuaternionHelpers(unittest.TestCase):
     """docs/globus-logic.md sections 2.2 and 2.4."""

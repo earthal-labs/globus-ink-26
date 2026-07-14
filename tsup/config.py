@@ -32,15 +32,15 @@ GAIN_K = 2.0         # 1/s; larger = snappier retargets
 # starts under load chug again.
 OMEGA_MAX = 0.20
 # Asymmetric deadband (wake/sleep). Sleep when closer than SLEEP; only resume
-# once error exceeds WAKE. Wake used to be 1.5° which parked ISS tracking in
-# HOLD for a long time — small corrections use RATE_OVERDRIVE_SMALL instead.
+# once error exceeds WAKE.
 DEADBAND_SLEEP_DEG = 0.20
 DEADBAND_WAKE_DEG = 0.60
-# Friction-drive overdrive (adaptive). Big slews overshot at 2–3× constant
-# scale; tiny tracking nudges need *more* boost to break stiction/inertia.
-# Interpolate by peak |kinematic| rate: small → OVERDRIVE_SMALL, large → OVERDRIVE_LARGE.
-RATE_OVERDRIVE_SMALL = 3.5   # boost when kin rates are tiny (tracking / catch-up)
-RATE_OVERDRIVE_LARGE = 1.5   # closer to 1× on big slews (less overshoot)
+# Friction-drive overdrive (adaptive), bench-tuned on the steel globe.
+# Interpolate by peak |kinematic| rate: tiny → SMALL, large slew → LARGE.
+# Empirically: near-1× on small nudges, ~10× once kin rates are already big
+# (inertia / breaking the sphere free under load).
+RATE_OVERDRIVE_SMALL = 1.0   # when kin rates are tiny
+RATE_OVERDRIVE_LARGE = 10.0  # when kin |rate| peak reaches RATE_SLEW_REF
 RATE_SLEW_REF = 250          # kin |rate| peak at which scale reaches LARGE
 RATE_CAP = 833               # half-steps/s — bringup-proven ceiling
 

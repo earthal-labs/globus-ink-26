@@ -27,7 +27,7 @@ from kinematics import (
 )
 from config import (
     SATELLITES, DEFAULT_SATELLITE, TLE_MAX_AGE_DAYS, STATE_DIR,
-    TICK_HZ, GAIN_K, OMEGA_MAX, OMEGA_MIN,
+    TICK_HZ, GAIN_K, OMEGA_MAX,
     DEADBAND_SLEEP_DEG, DEADBAND_WAKE_DEG, STEPS_PER_RAD, r,
     RATE_OVERDRIVE,
 )
@@ -167,11 +167,13 @@ def apply_commands(commands, state):
 
 
 def compute_omega(axis, θ, driving):
-    """Proportional ω with |ω| floors/caps and wake/sleep hysteresis.
+    """Proportional ω with wake/sleep hysteresis (no min-speed floor).
 
     Returns (ω, driving_next). Sleep when θ drops below DEADBAND_SLEEP;
-    only resume once θ exceeds DEADBAND_WAKE — kills the 0↔2 steps/s chatter
-    around a single threshold. OMEGA_MIN makes active corrections visible.
+    only resume once θ exceeds DEADBAND_WAKE. A former OMEGA_MIN floor caused
+    bang-bang axis flips at small θ (kin rates reversing every tick) — that
+    looked like the motors locking against each other. Stiction is handled by
+    RATE_OVERDRIVE on the serial path instead.
     """
     if driving:
         if θ < DEADBAND_SLEEP:
@@ -181,8 +183,6 @@ def compute_omega(axis, θ, driving):
             return array([0.0, 0.0, 0.0]), False
 
     mag = min(GAIN_K * θ, OMEGA_MAX)
-    if mag < OMEGA_MIN:
-        mag = OMEGA_MIN
     return mag * axis, True
 
 
@@ -205,7 +205,7 @@ def main(satellite_name=None, inject_error_deg=0.0, realign=False):
         q = inject_orientation_error(q, inject_error_deg)
         print(
             f"Injected {inject_error_deg:.0f}° software error — expect a visible "
-            f"slew (OMEGA_MIN={OMEGA_MIN} rad/s floor)."
+            f"slew (RATE_OVERDRIVE={RATE_OVERDRIVE:g}× on ink commands)."
         )
         save_state(q)
 
@@ -315,7 +315,7 @@ if __name__ == "__main__":
         type=float,
         default=0.0,
         help="Rotate software q by this many degrees at startup so θ is large "
-             "and OMEGA_MIN produces a visible slew (e.g. 90)",
+             "and RATE_OVERDRIVE produces a visible slew (e.g. 90)",
     )
     parser.add_argument(
         "--realign",

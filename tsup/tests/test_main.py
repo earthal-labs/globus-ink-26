@@ -294,13 +294,14 @@ class TestComputeOmega(unittest.TestCase):
         assert_allclose(ω, [0, 0, 0])
         self.assertFalse(driving)
 
-    def test_applies_omega_min_floor(self):
+    def test_proportional_not_floored(self):
+        # Small θ while driving must shrink |ω| — a min floor caused bang-bang.
         axis = array([1.0, 0.0, 0.0])
-        # Tiny θ while already driving → would be ≪ OMEGA_MIN without the floor.
-        ω, driving = main.compute_omega(axis, main.radians(0.2), driving=True)
+        θ = main.radians(0.5)
+        ω, driving = main.compute_omega(axis, θ, driving=True)
         self.assertTrue(driving)
-        self.assertAlmostEqual(norm(ω), main.OMEGA_MIN, places=6)
-
+        self.assertAlmostEqual(norm(ω), main.GAIN_K * θ, places=6)
+        self.assertLess(norm(ω), main.OMEGA_MAX)
 
 class TestInjectOrientationError(unittest.TestCase):
     def test_zero_is_noop(self):

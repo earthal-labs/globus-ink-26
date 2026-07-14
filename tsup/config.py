@@ -31,19 +31,15 @@ GAIN_K = 2.0         # 1/s; larger = snappier retargets
 # bringup-proven 833). Raise toward 0.26 if slews feel slow; drop if cold
 # starts under load chug again.
 OMEGA_MAX = 0.20
-# Floor |ω| whenever we are actively correcting. Without this, small θ
-# (software already "near" the target) yields ~10 steps/s ≈ 0.5 mm/s rim —
-# invisible on a 3 lb globe, while dead-reckoning still shrinks θ on paper.
-OMEGA_MIN = 0.10
-# Asymmetric deadband (wake/sleep) kills the 0.05° chatter loop. Sleep when
-# closer than SLEEP; only start driving again once error exceeds WAKE.
-DEADBAND_SLEEP_DEG = 0.05
-DEADBAND_WAKE_DEG = 1.0
+# Asymmetric deadband (wake/sleep) kills chatter. Sleep when closer than
+# SLEEP; only start driving again once error exceeds WAKE.
+DEADBAND_SLEEP_DEG = 0.25
+DEADBAND_WAKE_DEG = 1.5
 # Friction-drive overdrive: ink is commanded at SCALE × kinematic rates so the
 # omniwheels break stiction on the steel globe. Dead reckoning still uses the
 # unscaled rates — we assume the extra steps buy grip rather than true
-# geometric overshoot. Tune up if the globe lags; down if it overshoots.
-RATE_OVERDRIVE = 3.0
+# geometric overshoot. 3× overshot the 90° inject; 2× is the starting tune.
+RATE_OVERDRIVE = 2.0
 RATE_CAP = 833  # half-steps/s — bringup-proven ceiling; never command faster
 
 # --- Satellite tracking (sec. 7) ---

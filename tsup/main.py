@@ -27,7 +27,8 @@ from kinematics import (
 )
 from config import (
     SATELLITES, DEFAULT_SATELLITE, TLE_MAX_AGE_DAYS, STATE_DIR,
-    TICK_HZ, GAIN_K, OMEGA_MAX, DEADBAND_DEG, STEPS_PER_RAD, r,
+    TICK_HZ, GAIN_K, OMEGA_MAX, OMEGA_MIN,
+    DEADBAND_SLEEP_DEG, DEADBAND_WAKE_DEG, STEPS_PER_RAD, r,
 )
 
 STATE_PATH = Path(STATE_DIR) / "state.json"
@@ -36,7 +37,8 @@ STATE_PATH = Path(STATE_DIR) / "state.json"
 # than competing for space on /boot/firmware.
 TLE_CACHE_DIR = Path(__file__).parent / "data"
 ZHAT = array([0, 0, 1])
-DEADBAND = radians(DEADBAND_DEG)
+DEADBAND_SLEEP = radians(DEADBAND_SLEEP_DEG)
+DEADBAND_WAKE = radians(DEADBAND_WAKE_DEG)
 
 TLE_URL_TEMPLATE = "https://celestrak.org/NORAD/elements/gp.php?CATNR={}&FORMAT=TLE"
 
@@ -163,13 +165,48 @@ def apply_commands(commands, state):
             print("vzor disconnected")
 
 
-def main(satellite_name=None):
+def compute_omega(axis, θ, driving):
+    """Proportional ω with |ω| floors/caps and wake/sleep hysteresis.
+
+    Returns (ω, driving_next). Sleep when θ drops below DEADBAND_SLEEP;
+    only resume once θ exceeds DEADBAND_WAKE — kills the 0↔2 steps/s chatter
+    around a single threshold. OMEGA_MIN makes active corrections visible.
+    """
+    if driving:
+        if θ < DEADBAND_SLEEP:
+            return array([0.0, 0.0, 0.0]), False
+    else:
+        if θ < DEADBAND_WAKE:
+            return array([0.0, 0.0, 0.0]), False
+
+    mag = min(GAIN_K * θ, OMEGA_MAX)
+    if mag < OMEGA_MIN:
+        mag = OMEGA_MIN
+    return mag * axis, True
+
+
+def inject_orientation_error(q, degrees_error):
+    """Compose a known body-frame rotation so θ starts large (demo / recovery)."""
+    if degrees_error == 0:
+        return q
+    δq = from_axis_angle(array([1.0, 0.0, 0.0]), degrees_error)
+    return normalize(multiply(δq, q))
+
+
+def main(satellite_name=None, inject_error_deg=0.0, realign=False):
     """Entry point: align/restore state, then run the tracking loop (sec. 9.2)."""
     norad_id = SATELLITES[satellite_name or DEFAULT_SATELLITE]
 
-    q = load_state()
+    q = None if realign else load_state()
     if q is None:
         q = align_ritual_returning_q0()
+    if inject_error_deg:
+        q = inject_orientation_error(q, inject_error_deg)
+        print(
+            f"Injected {inject_error_deg:.0f}° software error — expect a visible "
+            f"slew (OMEGA_MIN={OMEGA_MIN} rad/s floor)."
+        )
+        save_state(q)
 
     conn = link.open_link()
     satellite = load_cached_tle(norad_id)
@@ -189,6 +226,7 @@ def main(satellite_name=None):
 
     last_tick = time.monotonic()
     last_save = last_tick
+    driving = False
 
     try:
         while True:
@@ -215,24 +253,22 @@ def main(satellite_name=None):
             axis, θ = shortest_arc(u, ZHAT)
 
             # Controller (sec. 4)
-            if θ < DEADBAND:
-                ω = array([0.0, 0.0, 0.0])
-            else:
-                ω = min(GAIN_K * θ, OMEGA_MAX) * axis
+            ω, driving = compute_omega(axis, θ, driving)
 
             # Command the wheels (sec. 8, 9.1)
             rates = wheel_rates(ω)
-            # Tip for the human eye: ~10 half-steps/s ≈ 0.5 mm/s at the rim —
-            # looks "dead" on a 3 lb globe even when ink is stepping correctly.
             peak = max((abs(int(x)) for x in rates), default=0)
             rim_mm_s = (peak / STEPS_PER_RAD) * r * 1000.0
+            status = "DRIVE" if driving else "HOLD"
             print(
-                f"θ={degrees(θ):.2f}° rates={rates} "
+                f"{status} θ={degrees(θ):.2f}° rates={rates} "
                 f"|rates|_max={peak} rim≈{rim_mm_s:.1f}mm/s"
             )
             link.send_rates(conn, rates)
 
             # Integrate ω_actual, not ω - quantization fix (sec. 5.2).
+            # NOTE: this assumes commanded rates were achieved. If the physical
+            # globe didn't move, software q still advances → θ shrinks on paper.
             ω_actual = actual_omega(rates)
             mag = norm(ω_actual)
             if mag > 0:
@@ -263,4 +299,30 @@ def main(satellite_name=None):
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Globus tsup tracker")
+    parser.add_argument(
+        "--satellite",
+        default=DEFAULT_SATELLITE,
+        choices=sorted(SATELLITES),
+        help="NORAD-tracked satellite name from config.SATELLITES",
+    )
+    parser.add_argument(
+        "--inject-error-deg",
+        type=float,
+        default=0.0,
+        help="Rotate software q by this many degrees at startup so θ is large "
+             "and OMEGA_MIN produces a visible slew (e.g. 90)",
+    )
+    parser.add_argument(
+        "--realign",
+        action="store_true",
+        help="Ignore saved state and re-run the alignment ritual",
+    )
+    args = parser.parse_args()
+    main(
+        satellite_name=args.satellite,
+        inject_error_deg=args.inject_error_deg,
+        realign=args.realign,
+    )

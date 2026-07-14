@@ -17,6 +17,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch, MagicMock
 
 from numpy import array
+from numpy.linalg import norm
 from numpy.testing import assert_allclose
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -272,6 +273,44 @@ class TestApplyCommands(unittest.TestCase):
     def test_drains_multiple_queued_commands_in_order(self):
         self.apply(("GOTO", 1.0, 2.0), ("GOTO", 3.0, 4.0))
         self.assertEqual((self.state["manual_lat"], self.state["manual_lon"]), (3.0, 4.0))
+
+
+class TestComputeOmega(unittest.TestCase):
+    def test_hold_below_wake_when_idle(self):
+        axis = array([1.0, 0.0, 0.0])
+        ω, driving = main.compute_omega(axis, main.radians(0.5), driving=False)
+        assert_allclose(ω, [0, 0, 0])
+        self.assertFalse(driving)
+
+    def test_starts_driving_past_wake(self):
+        axis = array([0.0, 1.0, 0.0])
+        ω, driving = main.compute_omega(axis, main.radians(2.0), driving=False)
+        self.assertTrue(driving)
+        self.assertGreater(norm(ω), 0)
+
+    def test_sleeps_once_under_sleep_threshold(self):
+        axis = array([0.0, 0.0, 1.0])
+        ω, driving = main.compute_omega(axis, main.radians(0.01), driving=True)
+        assert_allclose(ω, [0, 0, 0])
+        self.assertFalse(driving)
+
+    def test_applies_omega_min_floor(self):
+        axis = array([1.0, 0.0, 0.0])
+        # Tiny θ while already driving → would be ≪ OMEGA_MIN without the floor.
+        ω, driving = main.compute_omega(axis, main.radians(0.2), driving=True)
+        self.assertTrue(driving)
+        self.assertAlmostEqual(norm(ω), main.OMEGA_MIN, places=6)
+
+
+class TestInjectOrientationError(unittest.TestCase):
+    def test_zero_is_noop(self):
+        q = array([1.0, 0.0, 0.0, 0.0])
+        assert_allclose(main.inject_orientation_error(q, 0), q)
+
+    def test_nonzero_changes_q(self):
+        q = main.from_axis_angle(array([0, 1, 0]), -90)
+        q2 = main.inject_orientation_error(q, 90)
+        self.assertGreater(norm(q2 - q), 0.1)
 
 
 if __name__ == "__main__":

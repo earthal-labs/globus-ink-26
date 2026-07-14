@@ -39,6 +39,12 @@ OMEGA_MIN = 0.10
 # closer than SLEEP; only start driving again once error exceeds WAKE.
 DEADBAND_SLEEP_DEG = 0.05
 DEADBAND_WAKE_DEG = 1.0
+# Friction-drive overdrive: ink is commanded at SCALE × kinematic rates so the
+# omniwheels break stiction on the steel globe. Dead reckoning still uses the
+# unscaled rates — we assume the extra steps buy grip rather than true
+# geometric overshoot. Tune up if the globe lags; down if it overshoots.
+RATE_OVERDRIVE = 3.0
+RATE_CAP = 833  # half-steps/s — bringup-proven ceiling; never command faster
 
 # --- Satellite tracking (sec. 7) ---
 SATELLITES = {"ISS": 25544}  # name -> NORAD catalog id; add more here

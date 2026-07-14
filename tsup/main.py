@@ -22,13 +22,14 @@ from skyfield.api import Loader
 import link
 from bridge import Bridge
 from kinematics import (
-    wheel_rates, actual_omega, rotate, conjugate, shortest_arc,
+    wheel_rates, actual_omega, overdrive_rates, rotate, conjugate, shortest_arc,
     from_axis_angle, multiply, normalize, latlon_to_body,
 )
 from config import (
     SATELLITES, DEFAULT_SATELLITE, TLE_MAX_AGE_DAYS, STATE_DIR,
     TICK_HZ, GAIN_K, OMEGA_MAX, OMEGA_MIN,
     DEADBAND_SLEEP_DEG, DEADBAND_WAKE_DEG, STEPS_PER_RAD, r,
+    RATE_OVERDRIVE,
 )
 
 STATE_PATH = Path(STATE_DIR) / "state.json"
@@ -255,20 +256,21 @@ def main(satellite_name=None, inject_error_deg=0.0, realign=False):
             # Controller (sec. 4)
             ω, driving = compute_omega(axis, θ, driving)
 
-            # Command the wheels (sec. 8, 9.1)
+            # Command the wheels (sec. 8, 9.1). Overdrive what ink physically
+            # sees so the omniwheels break stiction; dead-reckon the intended
+            # kinematic rates so software q tracks the geometry we wanted.
             rates = wheel_rates(ω)
-            peak = max((abs(int(x)) for x in rates), default=0)
+            ink_rates = overdrive_rates(rates)
+            peak = max((abs(int(x)) for x in ink_rates), default=0)
             rim_mm_s = (peak / STEPS_PER_RAD) * r * 1000.0
             status = "DRIVE" if driving else "HOLD"
             print(
-                f"{status} θ={degrees(θ):.2f}° rates={rates} "
-                f"|rates|_max={peak} rim≈{rim_mm_s:.1f}mm/s"
+                f"{status} θ={degrees(θ):.2f}° kin={rates} ink={ink_rates} "
+                f"×{RATE_OVERDRIVE:g} |ink|_max={peak} rim≈{rim_mm_s:.1f}mm/s"
             )
-            link.send_rates(conn, rates)
+            link.send_rates(conn, ink_rates)
 
-            # Integrate ω_actual, not ω - quantization fix (sec. 5.2).
-            # NOTE: this assumes commanded rates were achieved. If the physical
-            # globe didn't move, software q still advances → θ shrinks on paper.
+            # Integrate ω_actual from unscaled rates (sec. 5.2).
             ω_actual = actual_omega(rates)
             mag = norm(ω_actual)
             if mag > 0:

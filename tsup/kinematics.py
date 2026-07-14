@@ -13,7 +13,7 @@ from math import cos, sin, radians, atan2, pi
 from numpy import array, cross
 from numpy.linalg import inv, norm
 
-from config import R, r, α, ψ, STEPS_PER_RAD, DIR
+from config import R, r, α, ψ, STEPS_PER_RAD, DIR, RATE_OVERDRIVE, RATE_CAP
 
 DIR = array(DIR)
 
@@ -40,6 +40,18 @@ def actual_omega(rates):
 
     return M_inv @ v
 
+def overdrive_rates(rates, scale=None, cap=None):
+    """Scale kinematic rates for friction-drive stiction; clamp to RATE_CAP.
+
+    Dead reckoning must keep using the unscaled `rates` — only the serial
+    command to ink is overdriven.
+    """
+    if scale is None:
+        scale = RATE_OVERDRIVE
+    if cap is None:
+        cap = RATE_CAP
+    scaled = (array(rates, dtype=float) * scale).round().astype(int)
+    return scaled.clip(-cap, cap)
 # Quaternion helpers (globus-logic.md sec. 2.2): q = (w, x, y, z), w scalar.
 
 def multiply(q1, q2):

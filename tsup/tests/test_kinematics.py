@@ -20,7 +20,7 @@ from numpy.testing import assert_allclose
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from kinematics import (
-    M, M_inv, wheel_rates, actual_omega,
+    M, M_inv, wheel_rates, actual_omega, overdrive_rates,
     multiply, conjugate, rotate, from_axis_angle, normalize,
     latlon_to_body, shortest_arc,
 )
@@ -57,6 +57,17 @@ class TestWheelRates(unittest.TestCase):
 
     def test_zero_omega_gives_zero_rates(self):
         assert_allclose(wheel_rates(array([0, 0, 0])), [0, 0, 0])
+
+
+class TestOverdriveRates(unittest.TestCase):
+    def test_scales_and_preserves_sign(self):
+        assert_allclose(overdrive_rates([10, -20, 0], scale=3, cap=1000), [30, -60, 0])
+
+    def test_clamps_to_cap(self):
+        assert_allclose(overdrive_rates([500, -500, 0], scale=3, cap=833), [833, -833, 0])
+
+    def test_zeros_stay_zero(self):
+        assert_allclose(overdrive_rates([0, 0, 0], scale=3), [0, 0, 0])
 
 
 class TestQuaternionHelpers(unittest.TestCase):

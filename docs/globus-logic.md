@@ -262,7 +262,13 @@ v_actual  = un-quantize(rates)
 integrate ω_actual                     ← not ω
 ```
 
-Now software q and physical globe agree to within one motor step, forever.
+Now software q and physical globe agree to within one motor step, forever —
+*if* the wheels actually roll without slip. On a steel sphere with rubber
+omniwheels, tiny rates lose to stiction. `RATE_OVERDRIVE` multiplies the
+rates **sent to ink** so the drive breaks free, while dead reckoning still
+integrates the unscaled kinematic rates (assuming the extra pulses buy grip
+rather than true geometric overshoot). Tune `RATE_OVERDRIVE` in `config.py`
+if the globe lags (raise) or overshoots (lower).
 
 ### 5.3 Persistence
 

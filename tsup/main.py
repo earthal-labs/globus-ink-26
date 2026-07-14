@@ -22,7 +22,8 @@ from skyfield.api import Loader
 import link
 from bridge import Bridge
 from kinematics import (
-    wheel_rates, actual_omega, overdrive_rates, overdrive_scale, rotate, conjugate,
+    wheel_rates, actual_omega, overdrive_rates, overdrive_scale, slew_wheel_rates,
+    rotate, conjugate,
     shortest_arc, from_axis_angle, multiply, normalize, latlon_to_body,
 )
 from config import (
@@ -219,6 +220,8 @@ def main(satellite_name=None, inject_error_deg=0.0, realign=False):
         "satellite_name": satellite_name or DEFAULT_SATELLITE,
         "manual_lat": manual_lat,
         "manual_lon": manual_lon,
+        "slew_rates": [0.0, 0.0, 0.0],
+        "slew_settle": [0.0, 0.0, 0.0],
     }
 
     bridge = Bridge(load_cached_tle)
@@ -257,11 +260,16 @@ def main(satellite_name=None, inject_error_deg=0.0, realign=False):
             # Controller (sec. 4)
             ω, driving = compute_omega(axis, θ, driving)
 
-            # Command the wheels (sec. 8, 9.1). Overdrive what ink physically
-            # sees so the omniwheels break stiction; dead-reckon the intended
-            # kinematic rates so software q tracks the geometry we wanted.
+            # Command the wheels (sec. 8, 9.1). Soft-slew kin rates through
+            # reverse (settle + climb-out), then overdrive for ink; DR uses
+            # the post-slew rates so q tracks what we actually commanded.
             # MANUAL caps overdrive so STATE stays faithful for vzor pans.
-            rates = wheel_rates(ω)
+            desired = wheel_rates(ω)
+            slewed, settle = slew_wheel_rates(
+                state["slew_rates"], state["slew_settle"], desired, Δt,
+            )
+            state["slew_rates"], state["slew_settle"] = slewed, settle
+            rates = array([int(round(x)) for x in slewed])
             scale = overdrive_scale(rates)
             if state["mode"] == "MANUAL":
                 scale = min(scale, MANUAL_OVERDRIVE_CAP)

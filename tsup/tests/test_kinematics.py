@@ -20,7 +20,7 @@ from numpy.testing import assert_allclose
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from kinematics import (
-    M, M_inv, wheel_rates, actual_omega, overdrive_rates,
+    M, M_inv, wheel_rates, actual_omega, overdrive_rates, slew_wheel_rates,
     multiply, conjugate, rotate, from_axis_angle, normalize,
     latlon_to_body, shortest_arc,
 )
@@ -80,6 +80,51 @@ class TestOverdriveRates(unittest.TestCase):
         self.assertLess(tiny, huge)
         self.assertGreater(tiny, RATE_OVERDRIVE_SMALL)
         self.assertAlmostEqual(huge, RATE_OVERDRIVE_LARGE, places=3)
+
+
+class TestSlewWheelRates(unittest.TestCase):
+    def test_approaches_same_sign_target(self):
+        rates, settle = slew_wheel_rates([0, 0, 0], [0, 0, 0], [100, 0, 0], dt=0.1)
+        self.assertGreater(rates[0], 0)
+        self.assertLess(rates[0], 100)
+        self.assertEqual(settle, [0.0, 0.0, 0.0])
+
+    def test_reverse_passes_through_zero_and_settles(self):
+        from config import REVERSE_SETTLE_S
+
+        rates, settle = slew_wheel_rates(
+            [50.0, 0, 0], [0, 0, 0], [-100.0, 0, 0],
+            dt=0.5, accel=200.0, reverse_accel=80.0, settle_s=REVERSE_SETTLE_S,
+        )
+        # 0.5s * 200 sps² → 100 sps of decel → hits zero and settles.
+        self.assertEqual(rates[0], 0.0)
+        self.assertAlmostEqual(settle[0], REVERSE_SETTLE_S)
+
+    def test_settle_holds_zero_then_releases(self):
+        rates, settle = slew_wheel_rates(
+            [0, 0, 0], [0.2, 0, 0], [-80.0, 0, 0],
+            dt=0.1, settle_s=0.35,
+        )
+        self.assertEqual(rates[0], 0.0)
+        self.assertAlmostEqual(settle[0], 0.1, places=5)
+
+        rates, settle = slew_wheel_rates(
+            [0, 0, 0], [0.05, 0, 0], [-80.0, 0, 0],
+            dt=0.1, settle_s=0.35,
+        )
+        self.assertEqual(rates[0], 0.0)
+        self.assertEqual(settle[0], 0.0)
+
+    def test_reaches_target_with_enough_time(self):
+        rates = [0.0, 0.0, 0.0]
+        settle = [0.0, 0.0, 0.0]
+        for _ in range(50):
+            rates, settle = slew_wheel_rates(
+                rates, settle, [50.0, -50.0, 0.0],
+                dt=0.1, accel=200.0, reverse_accel=200.0,
+            )
+        self.assertAlmostEqual(rates[0], 50.0, places=5)
+        self.assertAlmostEqual(rates[1], -50.0, places=5)
 
 class TestQuaternionHelpers(unittest.TestCase):
     """docs/globus-logic.md sections 2.2 and 2.4."""

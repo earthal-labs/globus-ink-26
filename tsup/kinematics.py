@@ -8,7 +8,7 @@ See docs/globus-logic.md for the derivations.
 Distributed under the GPL-3.0-or-later License. See LICENSE for details.
 """
 
-from math import cos, sin, radians, atan2, pi
+from math import cos, sin, radians, atan2, pi, copysign
 
 from numpy import array, cross
 from numpy.linalg import inv, norm
@@ -16,6 +16,7 @@ from numpy.linalg import inv, norm
 from config import (
     R, r, α, ψ, STEPS_PER_RAD, DIR,
     RATE_OVERDRIVE_SMALL, RATE_OVERDRIVE_LARGE, RATE_SLEW_REF, RATE_CAP,
+    RATE_ACCEL_SPS2, RATE_REVERSE_ACCEL_SPS2, REVERSE_SETTLE_S,
 )
 
 DIR = array(DIR)
@@ -68,6 +69,72 @@ def overdrive_rates(rates, scale=None, cap=None):
         cap = RATE_CAP
     scaled = (array(rates, dtype=float) * scale).round().astype(int)
     return scaled.clip(-cap, cap)
+
+
+def slew_wheel_rates(
+    current,
+    settle,
+    target,
+    dt,
+    accel=None,
+    reverse_accel=None,
+    settle_s=None,
+):
+    """Soft-start / reverse-through-zero filter for three signed wheel rates.
+
+    When a wheel's commanded rate flips sign, decelerate to 0, dwell
+    `settle_s`, then climb out with the gentler `reverse_accel` until near
+    cruise. Same-sign changes use `accel`. Returns (rates_list, settle_list)
+    as floats — callers round for ink / DR as needed.
+    """
+    if accel is None:
+        accel = RATE_ACCEL_SPS2
+    if reverse_accel is None:
+        reverse_accel = RATE_REVERSE_ACCEL_SPS2
+    if settle_s is None:
+        settle_s = REVERSE_SETTLE_S
+    dt = max(float(dt), 1e-6)
+
+    out_rates = []
+    out_settle = []
+    for i in range(3):
+        rate = float(current[i])
+        rem = float(settle[i])
+        want = float(target[i])
+
+        if rem > 0:
+            rem = max(0.0, rem - dt)
+            out_rates.append(0.0)
+            out_settle.append(rem)
+            continue
+
+        # Opposite signs → must pass through zero before climbing out.
+        if rate * want < 0.0:
+            step = accel * dt
+            if abs(rate) <= step:
+                out_rates.append(0.0)
+                out_settle.append(settle_s)
+            else:
+                out_rates.append(rate - copysign(step, rate))
+                out_settle.append(0.0)
+            continue
+
+        # Same sign (or starting from / aimed at zero): ease toward target.
+        # Gentler while still near a stop so reverse take-up isn't slammed.
+        climbing = abs(want) > abs(rate) + 1e-9
+        near_stop = abs(rate) < max(30.0, 0.35 * abs(want))
+        a = reverse_accel if climbing and near_stop else accel
+        step = a * dt
+        delta = want - rate
+        if abs(delta) <= step:
+            out_rates.append(want)
+        else:
+            out_rates.append(rate + copysign(step, delta))
+        out_settle.append(0.0)
+
+    return out_rates, out_settle
+
+
 # Quaternion helpers (globus-logic.md sec. 2.2): q = (w, x, y, z), w scalar.
 
 def multiply(q1, q2):

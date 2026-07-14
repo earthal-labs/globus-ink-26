@@ -48,6 +48,13 @@ RATE_CAP = 833               # half-steps/s — bringup-proven ceiling
 # (small pans look like many revolutions). AUTO can keep the big adaptive
 # boost for loaded ISS catch-up; MANUAL pan/goto caps here.
 MANUAL_OVERDRIVE_CAP = 1.0
+# Per-wheel signed rate slew (AUTO + MANUAL). Gearboxes / stiction need a beat
+# when reversing: decelerate through 0, brief settle, then soft accel so ink
+# is not slammed to the opposite sign. ~80 sps² → ~2–3 s to reach a ~200 sps
+# cruise after reverse — matches bench feel at 1×.
+RATE_ACCEL_SPS2 = 200.0          # same-sign approach (steps/s²)
+RATE_REVERSE_ACCEL_SPS2 = 80.0   # climb-out after stop/reverse
+REVERSE_SETTLE_S = 0.35          # hold at 0 when crossing directions
 
 # --- Satellite tracking (sec. 7) ---
 SATELLITES = {"ISS": 25544}  # name -> NORAD catalog id; add more here

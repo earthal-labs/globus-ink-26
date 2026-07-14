@@ -31,9 +31,10 @@
 //! arrow key, Home, or a lat/lon/goto command - since at that point the
 //! globe is no longer following whatever `track` last named.
 //!
-//! Manual mode moves at a fixed angular rate while an arrow key is held,
-//! rather than tracking a continuous drag delta, since the real globe is
-//! driven by stepper motors with a bounded angular rate. Local simulated
+//! Manual mode moves at a paced angular rate while an arrow key is held
+//! (soft accel/decel, brief reverse settle) rather than tracking a continuous
+//! drag delta, since the real globe is driven by stepper motors that need a
+//! beat to take up gearbox slack when reversing. Local simulated
 //! easing (used only while disconnected) follows the same reasoning.
 //!
 //! Pitch is unclamped and wraps like yaw in the local simulation: holding
@@ -89,7 +90,14 @@ const EASE_EPSILON: f32 = 0.01;
 /// radians-based rate above. Kept modest so map pans match globe motion;
 /// further soft/hard tuning lives in tsup `PAN_RATE_SCALE` / `MANUAL_OVERDRIVE_CAP`.
 const PAN_DEGREES_PER_SECOND: f32 = 10.0;
-/// A direction counts as "held" if a Press for it arrived within this
+/// Soft start / stop / reverse for PAN (deg/s²). Gearboxes need a beat when
+/// a wheel flips direction; easing lat/lon rate through zero keeps us from
+/// slamming a full reverse into that take-up. ~8 → about 1.25 s to cruise.
+const PAN_ACCEL_DPS2: f32 = 8.0;
+/// After a PAN axis crosses through zero, pause briefly before climbing out
+/// the other way (seconds).
+const PAN_REVERSE_SETTLE: Duration = Duration::from_millis(300);
+/// A direction counts as "held" if a Press for that direction arrived within this
 /// window. Tune up if release still feels laggy on a given terminal.
 const HOLD_GRACE: Duration = Duration::from_millis(150);
 const ZOOM_STEP: f32 = 1.15;
@@ -171,6 +179,12 @@ struct ViewState {
     pitch: f32,
     zoom: f32,
     held: HeldKeys,
+    /// Current eased PAN rates (deg/s) sent toward tsup while connected.
+    pan_lat: f32,
+    pan_lon: f32,
+    /// Remaining reverse-settle time per PAN axis after crossing through 0.
+    pan_settle_lat: Duration,
+    pan_settle_lon: Duration,
     last_tick: Instant,
     /// Set by the "/" command line; None when it isn't open.
     command_input: Option<String>,
@@ -198,6 +212,10 @@ impl ViewState {
             pitch: 0.0,
             zoom: 1.0,
             held: HeldKeys::default(),
+            pan_lat: 0.0,
+            pan_lon: 0.0,
+            pan_settle_lat: Duration::ZERO,
+            pan_settle_lon: Duration::ZERO,
             last_tick: now,
             command_input: None,
             status: None,
@@ -239,7 +257,7 @@ fn run(term: &mut Terminal<CrosstermBackend<io::Stdout>>, map: &MapData, bridge:
         if !state.connected {
             update(&mut state, now, dt);
         }
-        maybe_send_pan(&state, bridge, now);
+        maybe_send_pan(&mut state, bridge, now, dt);
 
         let camera = Camera {
             yaw: state.yaw,
@@ -327,34 +345,80 @@ fn apply_bridge_event(state: &mut ViewState, event: BridgeEvent) {
     }
 }
 
+/// Soft-eases one PAN axis toward `want`, with a brief settle at 0 when
+/// reversing — mirrors the mechanical reverse take-up on the steppers.
+fn ease_pan_axis(rate: f32, settle: Duration, want: f32, dt: f32) -> (f32, Duration) {
+    let mut settle = settle;
+    if !settle.is_zero() {
+        let settle_s = settle.as_secs_f32();
+        let rem = (settle_s - dt).max(0.0);
+        settle = Duration::from_secs_f32(rem);
+        return (0.0, settle);
+    }
+
+    // Opposite signs: decelerate through zero, then settle.
+    if rate * want < 0.0 {
+        let step = PAN_ACCEL_DPS2 * dt;
+        if rate.abs() <= step {
+            return (0.0, PAN_REVERSE_SETTLE);
+        }
+        return (rate - rate.signum() * step, Duration::ZERO);
+    }
+
+    let step = PAN_ACCEL_DPS2 * dt;
+    let delta = want - rate;
+    if delta.abs() <= step {
+        (want, Duration::ZERO)
+    } else {
+        (rate + delta.signum() * step, Duration::ZERO)
+    }
+}
+
 /// Sends a `PAN` command for the currently-held arrow keys, every frame
 /// they're held (matching tsup's own PAN watchdog: silence means stop, so
-/// this can't be a send-once-on-press event). No-op while disconnected or
-/// not in Manual - there's nothing live to steer.
-fn maybe_send_pan(state: &ViewState, bridge: &Bridge, now: Instant) {
+/// this can't be a send-once-on-press event). Rates ease in/out so a key
+/// reverse doesn't slam the motors into the opposite direction. Still
+/// sends while decelerating toward 0 after release.
+fn maybe_send_pan(state: &mut ViewState, bridge: &Bridge, now: Instant, dt: f32) {
     if !state.connected || state.mode != Mode::Manual {
+        state.pan_lat = 0.0;
+        state.pan_lon = 0.0;
+        state.pan_settle_lat = Duration::ZERO;
+        state.pan_settle_lon = Duration::ZERO;
         return;
     }
     let is_held = |t: Option<Instant>| t.is_some_and(|t| now.duration_since(t) < HOLD_GRACE);
-    let mut lat_rate = 0.0;
-    let mut lon_rate = 0.0;
+    let mut want_lat = 0.0;
+    let mut want_lon = 0.0;
     if is_held(state.held.up) {
-        lat_rate += PAN_DEGREES_PER_SECOND;
+        want_lat += PAN_DEGREES_PER_SECOND;
     }
     if is_held(state.held.down) {
-        lat_rate -= PAN_DEGREES_PER_SECOND;
+        want_lat -= PAN_DEGREES_PER_SECOND;
     }
     // Right/Left map to -/+ longitude, matching this crate's existing
     // yaw<->longitude convention (`lon_to_yaw` negates) so connected and
     // locally-simulated steering feel identical to the same key presses.
     if is_held(state.held.right) {
-        lon_rate -= PAN_DEGREES_PER_SECOND;
+        want_lon -= PAN_DEGREES_PER_SECOND;
     }
     if is_held(state.held.left) {
-        lon_rate += PAN_DEGREES_PER_SECOND;
+        want_lon += PAN_DEGREES_PER_SECOND;
     }
-    if lat_rate != 0.0 || lon_rate != 0.0 {
-        bridge.send(BridgeCommand::Pan { lat_rate, lon_rate });
+
+    let dt = dt.max(1e-4);
+    let (lat, settle_lat) = ease_pan_axis(state.pan_lat, state.pan_settle_lat, want_lat, dt);
+    let (lon, settle_lon) = ease_pan_axis(state.pan_lon, state.pan_settle_lon, want_lon, dt);
+    state.pan_lat = lat;
+    state.pan_lon = lon;
+    state.pan_settle_lat = settle_lat;
+    state.pan_settle_lon = settle_lon;
+
+    if lat != 0.0 || lon != 0.0 || !settle_lat.is_zero() || !settle_lon.is_zero() {
+        bridge.send(BridgeCommand::Pan {
+            lat_rate: lat,
+            lon_rate: lon,
+        });
     }
 }
 

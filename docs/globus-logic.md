@@ -269,7 +269,11 @@ or overshoots. Adaptive `RATE_OVERDRIVE_*` (bench-tuned: **1×** at tiny
 kinematic rates, up to **10×** once the slew is already large) is applied
 only to the rates **sent to ink** in AUTO; MANUAL caps at
 `MANUAL_OVERDRIVE_CAP` (~1×) so vzor pans stay in sync with software `q`.
-Dead reckoning always integrates the unscaled kinematic rates. See `config.py`.
+Before overdrive, kinematic rates pass through `slew_wheel_rates` (decel
+through zero, brief settle, soft climb-out) so a wheel reversing direction
+gets the ~seconds of take-up the gearboxes need instead of a hard flip.
+Dead reckoning always integrates the post-slew unscaled kinematic rates.
+See `config.py`.
 
 ### 5.3 Persistence
 

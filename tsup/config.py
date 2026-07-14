@@ -43,6 +43,11 @@ RATE_OVERDRIVE_SMALL = 1.0   # when kin rates are tiny
 RATE_OVERDRIVE_LARGE = 10.0  # when kin |rate| peak reaches RATE_SLEW_REF
 RATE_SLEW_REF = 250          # kin |rate| peak at which scale reaches LARGE
 RATE_CAP = 833               # half-steps/s — bringup-proven ceiling
+# MANUAL must stay near 1×: dead-reckoning integrates unscaled rates, so a
+# 10× ink boost makes the physical globe spin ~10× past what STATE/vzor show
+# (small pans look like many revolutions). AUTO can keep the big adaptive
+# boost for loaded ISS catch-up; MANUAL pan/goto caps here.
+MANUAL_OVERDRIVE_CAP = 1.0
 
 # --- Satellite tracking (sec. 7) ---
 SATELLITES = {"ISS": 25544}  # name -> NORAD catalog id; add more here
@@ -58,6 +63,9 @@ SERIAL_BOOT_WAIT_S = 2        # ink resets when the port opens; wait for it befo
 BRIDGE_HOST = "127.0.0.1"  # loopback only - this drives real motors, never LAN-reachable
 BRIDGE_PORT = 8765
 PAN_WATCHDOG_MS = 300       # no PAN in this long -> treat rate as 0 (silence means stop)
+# Soften vzor's wired PAN deg/s without rebuilding Rust (1.0 = use as-sent).
+# Vzor ships PAN_DEGREES_PER_SECOND=10; raise/lower here for feel on the Pi.
+PAN_RATE_SCALE = 1.0
 
 # --- Persisted state (sec. 5.3) ---
 # On a Pi running the overlay filesystem (root is RAM-backed, changes don't

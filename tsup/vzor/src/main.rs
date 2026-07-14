@@ -86,8 +86,9 @@ const EASE_RADIANS_PER_SECOND: f32 = 0.6;
 const EASE_EPSILON: f32 = 0.01;
 /// Real-world steering rate (degrees/sec) sent to tsup as `PAN` while an
 /// arrow key is held and connected - independent of the local simulation's
-/// radians-based rate above.
-const PAN_DEGREES_PER_SECOND: f32 = 30.0;
+/// radians-based rate above. Kept modest so map pans match globe motion;
+/// further soft/hard tuning lives in tsup `PAN_RATE_SCALE` / `MANUAL_OVERDRIVE_CAP`.
+const PAN_DEGREES_PER_SECOND: f32 = 10.0;
 /// A direction counts as "held" if a Press for it arrived within this
 /// window. Tune up if release still feels laggy on a given terminal.
 const HOLD_GRACE: Duration = Duration::from_millis(150);

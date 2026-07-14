@@ -27,7 +27,7 @@ from kinematics import (
 )
 from config import (
     SATELLITES, DEFAULT_SATELLITE, TLE_MAX_AGE_DAYS, STATE_DIR,
-    TICK_HZ, GAIN_K, OMEGA_MAX,
+    TICK_HZ, GAIN_K, OMEGA_MAX, MANUAL_OVERDRIVE_CAP, PAN_RATE_SCALE,
     DEADBAND_SLEEP_DEG, DEADBAND_WAKE_DEG, STEPS_PER_RAD, r,
 )
 
@@ -243,6 +243,8 @@ def main(satellite_name=None, inject_error_deg=0.0, realign=False):
                 φ, λ = subpoint_latlon(state["satellite"], now_utc())
             else:
                 lat_rate, lon_rate = bridge.pan_rate()
+                lat_rate *= PAN_RATE_SCALE
+                lon_rate *= PAN_RATE_SCALE
                 manual_lat = clip(state["manual_lat"] + lat_rate * Δt, -90.0, 90.0)
                 manual_lon = ((state["manual_lon"] + lon_rate * Δt + 180) % 360) - 180
                 state["manual_lat"], state["manual_lon"] = manual_lat, manual_lon
@@ -258,8 +260,11 @@ def main(satellite_name=None, inject_error_deg=0.0, realign=False):
             # Command the wheels (sec. 8, 9.1). Overdrive what ink physically
             # sees so the omniwheels break stiction; dead-reckon the intended
             # kinematic rates so software q tracks the geometry we wanted.
+            # MANUAL caps overdrive so STATE stays faithful for vzor pans.
             rates = wheel_rates(ω)
             scale = overdrive_scale(rates)
+            if state["mode"] == "MANUAL":
+                scale = min(scale, MANUAL_OVERDRIVE_CAP)
             ink_rates = overdrive_rates(rates, scale=scale)
             peak = max((abs(int(x)) for x in ink_rates), default=0)
             rim_mm_s = (peak / STEPS_PER_RAD) * r * 1000.0

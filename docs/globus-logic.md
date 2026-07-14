@@ -267,8 +267,9 @@ Now software q and physical globe agree to within one motor step, forever —
 omniwheels, a constant rate multiplier either underserves big loaded slews
 or overshoots. Adaptive `RATE_OVERDRIVE_*` (bench-tuned: **1×** at tiny
 kinematic rates, up to **10×** once the slew is already large) is applied
-only to the rates **sent to ink**; dead reckoning still integrates the
-unscaled kinematic rates. See `config.py`.
+only to the rates **sent to ink** in AUTO; MANUAL caps at
+`MANUAL_OVERDRIVE_CAP` (~1×) so vzor pans stay in sync with software `q`.
+Dead reckoning always integrates the unscaled kinematic rates. See `config.py`.
 
 ### 5.3 Persistence
 

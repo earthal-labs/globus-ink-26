@@ -13,7 +13,10 @@ from math import cos, sin, radians, atan2, pi
 from numpy import array, cross
 from numpy.linalg import inv, norm
 
-from config import R, r, α, ψ, STEPS_PER_RAD, DIR, RATE_OVERDRIVE, RATE_CAP
+from config import (
+    R, r, α, ψ, STEPS_PER_RAD, DIR,
+    RATE_OVERDRIVE_SMALL, RATE_OVERDRIVE_LARGE, RATE_SLEW_REF, RATE_CAP,
+)
 
 DIR = array(DIR)
 
@@ -40,14 +43,23 @@ def actual_omega(rates):
 
     return M_inv @ v
 
+def overdrive_scale(rates):
+    """Bigger boost for tiny rates (stiction); ~1.5× once the slew is large."""
+    peak = max((abs(int(x)) for x in rates), default=0)
+    if peak <= 0:
+        return RATE_OVERDRIVE_LARGE
+    t = min(peak / float(RATE_SLEW_REF), 1.0)
+    return RATE_OVERDRIVE_SMALL + (RATE_OVERDRIVE_LARGE - RATE_OVERDRIVE_SMALL) * t
+
+
 def overdrive_rates(rates, scale=None, cap=None):
     """Scale kinematic rates for friction-drive stiction; clamp to RATE_CAP.
 
     Dead reckoning must keep using the unscaled `rates` — only the serial
-    command to ink is overdriven.
+    command to ink is overdriven. Scale is adaptive unless overridden.
     """
     if scale is None:
-        scale = RATE_OVERDRIVE
+        scale = overdrive_scale(rates)
     if cap is None:
         cap = RATE_CAP
     scaled = (array(rates, dtype=float) * scale).round().astype(int)

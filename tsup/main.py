@@ -22,14 +22,13 @@ from skyfield.api import Loader
 import link
 from bridge import Bridge
 from kinematics import (
-    wheel_rates, actual_omega, overdrive_rates, rotate, conjugate, shortest_arc,
-    from_axis_angle, multiply, normalize, latlon_to_body,
+    wheel_rates, actual_omega, overdrive_rates, overdrive_scale, rotate, conjugate,
+    shortest_arc, from_axis_angle, multiply, normalize, latlon_to_body,
 )
 from config import (
     SATELLITES, DEFAULT_SATELLITE, TLE_MAX_AGE_DAYS, STATE_DIR,
     TICK_HZ, GAIN_K, OMEGA_MAX,
     DEADBAND_SLEEP_DEG, DEADBAND_WAKE_DEG, STEPS_PER_RAD, r,
-    RATE_OVERDRIVE,
 )
 
 STATE_PATH = Path(STATE_DIR) / "state.json"
@@ -205,7 +204,7 @@ def main(satellite_name=None, inject_error_deg=0.0, realign=False):
         q = inject_orientation_error(q, inject_error_deg)
         print(
             f"Injected {inject_error_deg:.0f}° software error — expect a visible "
-            f"slew (RATE_OVERDRIVE={RATE_OVERDRIVE:g}× on ink commands)."
+            f"slew (adaptive overdrive: small nudges boosted, big slews ~1.5×)."
         )
         save_state(q)
 
@@ -260,13 +259,14 @@ def main(satellite_name=None, inject_error_deg=0.0, realign=False):
             # sees so the omniwheels break stiction; dead-reckon the intended
             # kinematic rates so software q tracks the geometry we wanted.
             rates = wheel_rates(ω)
-            ink_rates = overdrive_rates(rates)
+            scale = overdrive_scale(rates)
+            ink_rates = overdrive_rates(rates, scale=scale)
             peak = max((abs(int(x)) for x in ink_rates), default=0)
             rim_mm_s = (peak / STEPS_PER_RAD) * r * 1000.0
             status = "DRIVE" if driving else "HOLD"
             print(
                 f"{status} θ={degrees(θ):.2f}° kin={rates} ink={ink_rates} "
-                f"×{RATE_OVERDRIVE:g} |ink|_max={peak} rim≈{rim_mm_s:.1f}mm/s"
+                f"×{scale:.2f} |ink|_max={peak} rim≈{rim_mm_s:.1f}mm/s"
             )
             link.send_rates(conn, ink_rates)
 
@@ -315,7 +315,7 @@ if __name__ == "__main__":
         type=float,
         default=0.0,
         help="Rotate software q by this many degrees at startup so θ is large "
-             "and RATE_OVERDRIVE produces a visible slew (e.g. 90)",
+             "and adaptive overdrive produces a visible slew (e.g. 90)",
     )
     parser.add_argument(
         "--realign",

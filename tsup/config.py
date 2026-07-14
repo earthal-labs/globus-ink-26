@@ -31,16 +31,18 @@ GAIN_K = 2.0         # 1/s; larger = snappier retargets
 # bringup-proven 833). Raise toward 0.26 if slews feel slow; drop if cold
 # starts under load chug again.
 OMEGA_MAX = 0.20
-# Asymmetric deadband (wake/sleep) kills chatter. Sleep when closer than
-# SLEEP; only start driving again once error exceeds WAKE.
-DEADBAND_SLEEP_DEG = 0.25
-DEADBAND_WAKE_DEG = 1.5
-# Friction-drive overdrive: ink is commanded at SCALE × kinematic rates so the
-# omniwheels break stiction on the steel globe. Dead reckoning still uses the
-# unscaled rates — we assume the extra steps buy grip rather than true
-# geometric overshoot. 3× overshot the 90° inject; 2× is the starting tune.
-RATE_OVERDRIVE = 2.0
-RATE_CAP = 833  # half-steps/s — bringup-proven ceiling; never command faster
+# Asymmetric deadband (wake/sleep). Sleep when closer than SLEEP; only resume
+# once error exceeds WAKE. Wake used to be 1.5° which parked ISS tracking in
+# HOLD for a long time — small corrections use RATE_OVERDRIVE_SMALL instead.
+DEADBAND_SLEEP_DEG = 0.20
+DEADBAND_WAKE_DEG = 0.60
+# Friction-drive overdrive (adaptive). Big slews overshot at 2–3× constant
+# scale; tiny tracking nudges need *more* boost to break stiction/inertia.
+# Interpolate by peak |kinematic| rate: small → OVERDRIVE_SMALL, large → OVERDRIVE_LARGE.
+RATE_OVERDRIVE_SMALL = 3.5   # boost when kin rates are tiny (tracking / catch-up)
+RATE_OVERDRIVE_LARGE = 1.5   # closer to 1× on big slews (less overshoot)
+RATE_SLEW_REF = 250          # kin |rate| peak at which scale reaches LARGE
+RATE_CAP = 833               # half-steps/s — bringup-proven ceiling
 
 # --- Satellite tracking (sec. 7) ---
 SATELLITES = {"ISS": 25544}  # name -> NORAD catalog id; add more here

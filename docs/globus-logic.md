@@ -264,11 +264,11 @@ integrate ω_actual                     ← not ω
 
 Now software q and physical globe agree to within one motor step, forever —
 *if* the wheels actually roll without slip. On a steel sphere with rubber
-omniwheels, tiny rates lose to stiction. `RATE_OVERDRIVE` multiplies the
-rates **sent to ink** so the drive breaks free, while dead reckoning still
-integrates the unscaled kinematic rates (assuming the extra pulses buy grip
-rather than true geometric overshoot). Tune `RATE_OVERDRIVE` in `config.py`
-if the globe lags (raise) or overshoots (lower).
+omniwheels, tiny rates lose to stiction while big slews overshoot if you
+always multiply by a large constant. Adaptive `RATE_OVERDRIVE_*` boosts
+**small** kinematic rates more (break free / overcome inertia) and stays
+near ~1.5× once the slew is already large. Dead reckoning still integrates
+the unscaled kinematic rates. Tune in `config.py`.
 
 ### 5.3 Persistence
 

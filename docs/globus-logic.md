@@ -388,6 +388,11 @@ its direction flag flipped in config (three booleans). Then command +ω_x and
 confirm wheel 1 leads. Five minutes, done once, and encode the flags in
 `config.py`, not in your head.
 
+Open-loop **scale and reverse timing** against the steel ball (full-revolution
+stopwatch, \(k = \omega_{\mathrm{cmd}}/\omega_{\mathrm{actual}}\), settle
+times) is written up as a tomorrow-ready checklist in
+[`docs/calibration-bench.md`](calibration-bench.md).
+
 ---
 
 ## 7. Time and the orbit model

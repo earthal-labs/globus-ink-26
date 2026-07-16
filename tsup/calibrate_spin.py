@@ -39,6 +39,7 @@ AXES = {
     "X": array([1.0, 0.0, 0.0]),                    # tilt N-S
     "Y": array([0.0, 1.0, 0.0]),                    # tilt orthogonal
     "NE": array([1.0, 1.0, 0.0]) / sqrt(2.0),       # combined tilt
+    "NW": array([1.0, -1.0, 0.0]) / sqrt(2.0),      # NE's mirror - hypothesis discriminator
 }
 
 

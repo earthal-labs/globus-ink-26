@@ -175,8 +175,21 @@ Then:
 ## Operational notes
 
 - **Cold vs warm:** first reverse after sitting idle is worst; note it.
-- **Slip:** if the wheels scrub and the mark stalls, `T` is meaningless —
-  reduce `|ω|` or load / increase contact pressure, don’t raise overdrive yet.
+- **Ball/tread slip:** if the wheels scrub and the mark stalls, `T` is
+  meaningless — reduce `|ω|` or increase contact pressure, don’t raise
+  overdrive yet. Tag the CSV row `slip`/`stall` and abort that trial.
+- **Shaft/hub slip is a stop-ship for calibration.** If the stepper shaft
+  spins inside the Nexus hub (or the hub free-spins while the tread isn’t
+  locked to the shaft), ink still steps and software still dead-reckons —
+  but the ball didn’t move. Those rows look like sky-high \(k\), “motor
+  lock,” or chaotic X/Y/NE medians. Do **not** bake `STEPS_PER_RAD` /
+  overdrive from that data. Secure each hub (set screw on shaft flat /
+  threadlocker / clamp collar), then re-run Protocol A. Pure `+Z` (all
+  wheels equal) can still look fine while a weak hub only fails under
+  unequal-load X/Y/NE cases — hub-check on X and Y, not only Z.
+- **Outliers:** discard double-Enter (e.g. `T < 10 s` at `|ω|=0.05`) and
+  known leave-it-running disasters before trusting medians. Prefer
+  per-axis medians of *clean* laps only.
 - **STATE / DR:** with overdrive ≠ 1×, software `q` drifts from the steel ball.
   Scale trials at 1×; live AUTO may still use adaptive boost afterward, but
   know that high AUTO overdrive **desyncs** dead reckoning unless you later
